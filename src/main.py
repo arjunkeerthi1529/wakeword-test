@@ -19,6 +19,7 @@ from .audio.wake_gate import WakeGate
 from .audio.wake_word import WakeWordDetector
 from .config import get_config
 from .io.pi_gpio import PiHardwareIO
+from .io.null_hardware import NullHardwareIO
 from .latency import LatencyTracker
 from .llm.llama_cpp_client import LlamaCppClient
 from .stt.whisper_engine import WhisperEngine
@@ -42,11 +43,16 @@ def main() -> None:
                 cfg.wake_model, cfg.wake_backend)
 
     # ── Hardware ──────────────────────────────────────────────────────────
-    hardware = PiHardwareIO(
-        mute_button_pin=cfg.gpio_mute_pin,
-        listening_led_pin=cfg.gpio_listen_led_pin,
-        online_led_pin=cfg.gpio_online_led_pin,
-    )
+    try:
+        hardware = PiHardwareIO(
+            mute_button_pin=cfg.gpio_mute_pin,
+            listening_led_pin=cfg.gpio_listen_led_pin,
+            online_led_pin=cfg.gpio_online_led_pin,
+        )
+        logger.info("GPIO initialised — button on pin %d", cfg.gpio_mute_pin)
+    except Exception as e:
+        logger.warning("GPIO unavailable (%s) — falling back to NullHardwareIO", e)
+        hardware = NullHardwareIO()
 
     # ── Audio (80 ms blocks = openWakeWord's native chunk size) ───────────
     audio = AudioCapture(
