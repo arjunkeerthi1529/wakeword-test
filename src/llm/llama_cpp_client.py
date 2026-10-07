@@ -47,11 +47,11 @@ class LlamaCppClient:
             "model": "local",           # llama.cpp ignores this, uses loaded model
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user",   "content": user_text},
+                {"role": "user",   "content": user_text + " /no_think"},
             ],
             "stream": True,
             "temperature": 0.7,
-            "max_tokens": 150,
+            "max_tokens": 200,
             "stop": ["\nUser:", "<|im_end|>"],
         }
 
@@ -85,6 +85,7 @@ class LlamaCppClient:
             data = json.loads(line)
 
             # Extract token text from delta
+            # Qwen3 puts reasoning in reasoning_content and reply in content
             choices = data.get("choices", [])
             token_text = ""
             finish_reason = None
