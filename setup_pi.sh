@@ -48,8 +48,9 @@ echo "whisper-cli built at: $PI_HOME/whisper.cpp/build/bin/whisper-cli"
 
 echo "=== [5/8] Download whisper tiny.en-q5_1 model ==="
 bash models/download-ggml-model.sh tiny.en-q5_1
-# Copy into the project's models/ directory
-cp -v "$PI_HOME/whisper.cpp/models/ggml-tiny.en-q5_1.bin" "$PROJECT_DIR/models/"
+# Ensure models/ directory exists then copy the model
+mkdir -p "$PROJECT_DIR/models"
+cp -v "$PI_HOME/whisper.cpp/models/ggml-tiny.en-q5_1.bin" "$PROJECT_DIR/models/ggml-tiny.en-q5_1.bin"
 
 echo "=== [6/8] Verify llama.cpp server is reachable ==="
 if curl -sf "${LLM_BASE_URL:-http://localhost:8080}/health" > /dev/null 2>&1; then
