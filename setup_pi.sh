@@ -51,17 +51,14 @@ bash models/download-ggml-model.sh tiny.en-q5_1
 # Copy into the project's models/ directory
 cp -v "$PI_HOME/whisper.cpp/models/ggml-tiny.en-q5_1.bin" "$PROJECT_DIR/models/"
 
-echo "=== [6/8] Install Ollama and pull llama3.2:1b ==="
-if ! command -v ollama &>/dev/null; then
-    curl -fsSL https://ollama.com/install.sh | sh
+echo "=== [6/8] Verify llama.cpp server is reachable ==="
+if curl -sf "${LLM_BASE_URL:-http://localhost:8080}/health" > /dev/null 2>&1; then
+    echo "llama.cpp server is running at ${LLM_BASE_URL:-http://localhost:8080} ✓"
+else
+    echo "WARNING: llama.cpp server not reachable at ${LLM_BASE_URL:-http://localhost:8080}"
+    echo "Make sure llama-server is running before starting the assistant:"
+    echo "  ./llama-server -m <your-model.gguf> --port 8080"
 fi
-# Start Ollama if not already running
-if ! systemctl is-active --quiet ollama 2>/dev/null; then
-    ollama serve &
-    OLLAMA_PID=$!
-    sleep 5
-fi
-ollama pull llama3.2:1b
 
 echo "=== [7/8] Piper voice model ==="
 cd "$PROJECT_DIR"

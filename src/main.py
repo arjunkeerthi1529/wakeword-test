@@ -1,7 +1,7 @@
 """pi-voice-assistant — main entry point.
 
 Full pipeline on Raspberry Pi 4:
-    openWakeWord ("Hey Jarvis") -> whisper.cpp STT -> Ollama LLM -> Piper TTS
+    openWakeWord ("Hey Jarvis") -> whisper.cpp STT -> llama.cpp LLM -> Piper TTS
 
 Per-stage latency is printed after every interaction and appended to
 latency_log.csv for offline analysis.
@@ -20,7 +20,7 @@ from .audio.wake_word import WakeWordDetector
 from .config import get_config
 from .io.pi_gpio import PiHardwareIO
 from .latency import LatencyTracker
-from .llm.ollama_client import OllamaStreamClient
+from .llm.llama_cpp_client import LlamaCppClient
 from .stt.whisper_engine import WhisperEngine
 from .tts.piper_engine import PiperEngine
 
@@ -37,8 +37,8 @@ ECHO_FLUSH_S = 0.8          # drain mic after TTS to suppress speaker echo
 
 def main() -> None:
     cfg = get_config()
-    logger.info("Config loaded — model=%s  stt=%s  wake=%s/%s",
-                cfg.ollama_model, Path(cfg.stt_model).name,
+    logger.info("Config loaded — llm=%s  stt=%s  wake=%s/%s",
+                cfg.llm_base_url, Path(cfg.stt_model).name,
                 cfg.wake_model, cfg.wake_backend)
 
     # ── Hardware ──────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ def main() -> None:
         model=cfg.stt_model,
         n_threads=cfg.stt_threads,
     )
-    llm = OllamaStreamClient(base_url=cfg.ollama_base_url, model=cfg.ollama_model)
+    llm = LlamaCppClient(base_url=cfg.llm_base_url)
     tts = PiperEngine(model_path=cfg.piper_voice)   # warmup phrases pre-synthesized here
 
     # ── Start ─────────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ def main() -> None:
             continue
 
         # ── LLM (streaming) ───────────────────────────────────────────────
-        logger.info("Querying Ollama (%s)…", cfg.ollama_model)
+        logger.info("Querying llama.cpp (%s)…", cfg.llm_base_url)
 
         def _on_first_token() -> None:
             tracker.mark("llm_first_token")
@@ -147,10 +147,10 @@ def main() -> None:
 
         # ── Latency report ────────────────────────────────────────────────
         tracker.report(
-            ollama_eval_count=stats.get("eval_count", 0),
-            ollama_eval_duration_ns=stats.get("eval_duration", 0),
-            ollama_prompt_eval_count=stats.get("prompt_eval_count", 0),
-            ollama_prompt_eval_duration_ns=stats.get("prompt_eval_duration", 0),
+            tok_per_s=stats.get("tok_per_s", 0.0),
+            tok_count=stats.get("tok_count", 0),
+            prompt_tok=stats.get("prompt_tok", 0),
+            prompt_per_s=stats.get("prompt_per_s", 0.0),
             log_csv=CSV_LOG if cfg.log_latency_csv else None,
         )
         tracker.reset()

@@ -15,8 +15,7 @@ class Config:
     stt_binary:          str
     stt_model:           str
     stt_threads:         int
-    ollama_base_url:     str
-    ollama_model:        str
+    llm_base_url:        str       # llama.cpp server URL e.g. http://localhost:8080
     piper_voice:         str
     wake_model:          str
     wake_threshold:      float
@@ -47,14 +46,13 @@ def get_config() -> Config:
         stt_binary=os.getenv("STT_BINARY", raw["stt_binary"]),
         stt_model=_resolve(os.getenv("STT_MODEL", raw["stt_model"])),
         stt_threads=int(os.getenv("STT_THREADS", raw.get("stt_threads", 3))),
-        ollama_base_url=os.getenv("OLLAMA_BASE_URL",
-                                  raw.get("ollama_base_url", "http://localhost:11434")),
-        ollama_model=os.getenv("OLLAMA_MODEL", raw.get("ollama_model", "llama3.2:1b")),
+        llm_base_url=os.getenv("LLM_BASE_URL",
+                               raw.get("llm_base_url", "http://localhost:8080")),
         piper_voice=_resolve(os.getenv("PIPER_VOICE", raw["piper_voice"])),
         wake_model=os.getenv("WAKE_MODEL", wake_cfg.get("model", "hey_jarvis")),
         wake_threshold=float(os.getenv("WAKE_THRESHOLD",
                                        wake_cfg.get("threshold", 0.5))),
-        wake_backend=os.getenv("WAKE_BACKEND", wake_cfg.get("backend", "tflite")),
+        wake_backend=os.getenv("WAKE_BACKEND", wake_cfg.get("backend", "onnx")),
         gpio_mute_pin=int(gpio_cfg.get("mute_button_pin", 17)),
         gpio_listen_led_pin=int(gpio_cfg.get("listening_led_pin", 27)),
         gpio_online_led_pin=int(gpio_cfg.get("online_led_pin", 22)),

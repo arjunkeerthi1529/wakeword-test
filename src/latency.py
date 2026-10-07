@@ -14,8 +14,8 @@ class LatencyTracker:
         wake_fire         — WakeGate on_wake callback fires
         speech_end        — VAD silence timeout, utterance yielded
         stt_done          — whisper.cpp subprocess returns transcription
-        llm_first_token   — first non-empty streaming token from Ollama
-        llm_done          — Ollama stream done=true
+        llm_first_token   — first non-empty streaming token from llama.cpp
+        llm_done          — llama.cpp stream stop=true
         tts_synth_done    — Piper finishes synthesizing bytes
         tts_play_done     — sounddevice.wait() returns after playback
 
@@ -24,7 +24,7 @@ class LatencyTracker:
         tracker.mark("wake_fire")
         ...
         tracker.mark("tts_play_done")
-        tracker.report(eval_count=N, eval_duration_ns=D, log_csv=Path("latency_log.csv"))
+        tracker.report(tok_per_s=X, tok_count=N, log_csv=Path("latency_log.csv"))
         tracker.reset()
     """
 
@@ -44,10 +44,10 @@ class LatencyTracker:
 
     def report(
         self,
-        ollama_eval_count: int = 0,
-        ollama_eval_duration_ns: int = 0,
-        ollama_prompt_eval_count: int = 0,
-        ollama_prompt_eval_duration_ns: int = 0,
+        tok_per_s: float = 0.0,
+        tok_count: int = 0,
+        prompt_tok: int = 0,
+        prompt_per_s: float = 0.0,
         log_csv: Optional[Path] = None,
     ) -> None:
         stt_lat   = self.elapsed("speech_end",     "stt_done")
@@ -56,10 +56,6 @@ class LatencyTracker:
         tts_synth = self.elapsed("llm_done",        "tts_synth_done")
         tts_play  = self.elapsed("tts_synth_done",  "tts_play_done")
         e2e       = self.elapsed("wake_fire",       "tts_play_done")
-
-        tps = 0.0
-        if ollama_eval_duration_ns > 0 and ollama_eval_count > 0:
-            tps = ollama_eval_count / (ollama_eval_duration_ns / 1_000_000_000)
 
         def _fmt(v: Optional[float]) -> str:
             return f"{v:>6.2f} s" if v is not None else "   N/A  "
@@ -74,11 +70,10 @@ class LatencyTracker:
         print(f"  TTS synthesize    {_fmt(tts_synth)}")
         print(f"  TTS play          {_fmt(tts_play)}")
         print(f"  End-to-end        {_fmt(e2e)}")
-        if tps > 0:
-            print(f"  LLM speed        {tps:>5.1f} tok/s  ({ollama_eval_count} tok generated)")
-        if ollama_prompt_eval_count > 0 and ollama_prompt_eval_duration_ns > 0:
-            prompt_tps = ollama_prompt_eval_count / (ollama_prompt_eval_duration_ns / 1_000_000_000)
-            print(f"  Prompt eval      {prompt_tps:>5.1f} tok/s  ({ollama_prompt_eval_count} prompt tok)")
+        if tok_per_s > 0:
+            print(f"  LLM speed        {tok_per_s:>5.1f} tok/s  ({tok_count} tok generated)")
+        if prompt_per_s > 0:
+            print(f"  Prompt eval      {prompt_per_s:>5.1f} tok/s  ({prompt_tok} prompt tok)")
         print(SEP + "\n")
 
         if log_csv is not None:
@@ -90,9 +85,9 @@ class LatencyTracker:
                 "tts_synth_s":  tts_synth,
                 "tts_play_s":   tts_play,
                 "e2e_s":        e2e,
-                "tok_per_s":    round(tps, 2),
-                "tok_count":    ollama_eval_count,
-                "prompt_tok":   ollama_prompt_eval_count,
+                "tok_per_s":    round(tok_per_s, 2),
+                "tok_count":    tok_count,
+                "prompt_tok":   prompt_tok,
             })
 
     def reset(self) -> None:

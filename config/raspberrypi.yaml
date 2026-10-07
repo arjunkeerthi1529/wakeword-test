@@ -6,11 +6,10 @@ stt_binary: /home/pi/whisper.cpp/build/bin/whisper-cli
 stt_model: models/ggml-tiny.en-q5_1.bin
 stt_threads: 3
 
-# Ollama serves llama3.2:1b locally.
-# Pull once with: ollama pull llama3.2:1b
-# 1B model fits within Pi 4's 2 GB RAM alongside STT and TTS.
-ollama_base_url: http://localhost:11434
-ollama_model: llama3.2:1b
+# llama.cpp server — already running with Qwen model.
+# Start with: ./llama-server -m <model.gguf> --port 8080
+# No Ollama needed.
+llm_base_url: http://localhost:8080
 
 # Piper TTS — low quality voice is faster and lighter on Pi CPU.
 # Download: bash scripts/download_models.sh
