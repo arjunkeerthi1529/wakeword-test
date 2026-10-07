@@ -29,10 +29,15 @@ class WakeWordDetector:
         self._last_log = 0.0
         self._max_since_log = 0.0
         logger.info("Loading wake word model '%s' (framework=%s)", model_name, inference_framework)
-        self.model = Model(
-            wakeword_models=[model_name],
-            inference_framework=inference_framework,
-        )
+        try:
+            self.model = Model(
+                wakeword_models=[model_name],
+                inference_framework=inference_framework,
+            )
+        except TypeError:
+            # Older openwakeword versions don't accept inference_framework as kwarg
+            logger.warning("inference_framework kwarg failed — retrying without it")
+            self.model = Model(wakeword_models=[model_name])
         logger.info("Wake word model ready — threshold=%.2f", threshold)
 
     def detect(self, audio_f32: np.ndarray) -> bool:
