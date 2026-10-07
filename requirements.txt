@@ -1,0 +1,6 @@
+pyyaml
+sounddevice
+numpy
+piper-tts
+requests
+openwakeword

@@ -1,0 +1,31 @@
+platform: raspberrypi
+
+# whisper.cpp binary compiled on Pi ARM — see setup_pi.sh for build steps.
+# tiny.en-q5_1 uses ~40 MB RAM and transcribes a 5s utterance in ~0.8-1.5s on Pi 4.
+stt_binary: /home/pi/whisper.cpp/build/bin/whisper-cli
+stt_model: models/ggml-tiny.en-q5_1.bin
+stt_threads: 3
+
+# Ollama serves llama3.2:1b locally.
+# Pull once with: ollama pull llama3.2:1b
+# 1B model fits within Pi 4's 2 GB RAM alongside STT and TTS.
+ollama_base_url: http://localhost:11434
+ollama_model: llama3.2:1b
+
+# Piper TTS — low quality voice is faster and lighter on Pi CPU.
+# Download: bash scripts/download_models.sh
+piper_voice: models/piper/en_US-lessac-low.onnx
+
+wake_word:
+  model: hey_jarvis
+  threshold: 0.5
+  backend: tflite         # tflite-runtime is lighter than onnxruntime on ARM
+
+gpio:
+  mute_button_pin: 17
+  listening_led_pin: 27
+  online_led_pin: 22
+
+# Append per-turn latency rows to latency_log.csv alongside this process.
+# Set false to disable CSV logging (table still prints to terminal).
+log_latency_csv: true

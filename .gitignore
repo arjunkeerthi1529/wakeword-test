@@ -1,0 +1,14 @@
+models/*.bin
+models/*.gguf
+models/piper/*.onnx
+models/piper/*.onnx.json
+models/.gitkeep
+latency_log.csv
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.egg-info/
+dist/
+build/
+.venv/

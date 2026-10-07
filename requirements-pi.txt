@@ -1,0 +1,8 @@
+# Install on Raspberry Pi in addition to requirements.txt.
+# gpiozero + RPi.GPIO provide the GPIO abstraction layer.
+gpiozero
+RPi.GPIO
+
+# tflite-runtime is lighter than full onnxruntime on ARM (~50 MB vs ~350 MB).
+# openWakeWord switches to it automatically when inference_framework="tflite".
+tflite-runtime
