@@ -47,12 +47,15 @@ class LlamaCppClient:
             "model": "local",           # llama.cpp ignores this, uses loaded model
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user",   "content": user_text + " /no_think"},
+                {"role": "user",   "content": user_text},
             ],
             "stream": True,
             "temperature": 0.7,
             "max_tokens": 200,
             "stop": ["\nUser:", "<|im_end|>"],
+            # Disable Qwen3 chain-of-thought thinking mode via llama.cpp's
+            # Jinja template parameter — prevents all tokens going to reasoning_content
+            "chat_template_kwargs": {"enable_thinking": False},
         }
 
         logger.debug("POST %s/v1/chat/completions", self.base_url)
