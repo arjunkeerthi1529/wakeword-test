@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import Callable, Dict, Optional, Tuple
 
 import requests
@@ -14,19 +15,24 @@ _SYSTEM_PROMPT = (
 
 
 class LlamaCppClient:
-    """HTTP streaming client for llama.cpp server /completion endpoint.
+    """HTTP streaming client for llama.cpp server /v1/chat/completions endpoint.
+
+    Uses the OpenAI-compatible endpoint so llama.cpp automatically applies
+    the model's chat template (required for Qwen, Llama-3, etc.).
 
     llama.cpp server must be running:
-        ./llama-server -m <model.gguf> --port 8080
+        ~/llm/llama.cpp/build/bin/llama-server \\
+            -m ~/models/Qwen3.5-0.8B-Q4_0.gguf \\
+            --host 0.0.0.0 --port 8080 -c 2048 -t 4 --parallel 1
 
     Fires on_first_token() the instant the first non-empty token arrives,
     enabling accurate TTFT measurement from the caller's LatencyTracker.
 
     Returns (reply_text, stats) where stats contains:
-        tok_per_s       — generated tokens per second (from llama.cpp timings)
-        tok_count       — number of tokens generated
-        prompt_tok      — number of prompt tokens processed
-        prompt_per_s    — prompt evaluation tokens per second
+        tok_per_s    — generated tokens/s (computed from wall clock)
+        tok_count    — completion tokens (from usage field)
+        prompt_tok   — prompt tokens (from usage field)
+        prompt_per_s — prompt tokens/s (computed from wall clock)
     """
 
     def __init__(self, base_url: str):
@@ -37,25 +43,21 @@ class LlamaCppClient:
         user_text: str,
         on_first_token: Optional[Callable[[], None]] = None,
     ) -> Tuple[str, Dict]:
-        """Send user_text to llama.cpp server, stream the response.
-
-        on_first_token — called exactly once when the first non-empty token
-                         arrives; use to record tracker.mark("llm_first_token").
-        Returns (full_reply, stats_dict).
-        """
-        prompt = f"{_SYSTEM_PROMPT}\n\nUser: {user_text}\nAssistant:"
-
         payload = {
-            "prompt": prompt,
+            "model": "local",           # llama.cpp ignores this, uses loaded model
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user",   "content": user_text},
+            ],
             "stream": True,
             "temperature": 0.7,
-            "n_predict": 150,
-            "stop": ["\nUser:", "\n\n"],
+            "max_tokens": 150,
+            "stop": ["\nUser:", "<|im_end|>"],
         }
 
-        logger.debug("POST %s/completion", self.base_url)
+        logger.debug("POST %s/v1/chat/completions", self.base_url)
         resp = requests.post(
-            f"{self.base_url}/completion",
+            f"{self.base_url}/v1/chat/completions",
             json=payload,
             stream=True,
             timeout=60,
@@ -64,23 +66,36 @@ class LlamaCppClient:
 
         tokens = []
         first_fired = False
-        stats: Dict = {}
+        t_first: Optional[float] = None
+        t_start = time.monotonic()
+        usage: Dict = {}
 
         for raw_line in resp.iter_lines():
             if not raw_line:
                 continue
-            # llama.cpp streams Server-Sent Events: "data: {...}"
             line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
-            if line.startswith("data:"):
-                line = line[len("data:"):].strip()
-            if not line:
+
+            # SSE format: "data: {...}" or "data: [DONE]"
+            if not line.startswith("data:"):
                 continue
+            line = line[len("data:"):].strip()
+            if line == "[DONE]":
+                break
 
             data = json.loads(line)
-            token_text = data.get("content", "")
 
-            # Fire TTFT callback exactly once on the first non-empty token
+            # Extract token text from delta
+            choices = data.get("choices", [])
+            token_text = ""
+            finish_reason = None
+            if choices:
+                delta = choices[0].get("delta", {})
+                token_text = delta.get("content", "") or ""
+                finish_reason = choices[0].get("finish_reason")
+
+            # Fire TTFT callback exactly once on first non-empty token
             if token_text and not first_fired:
+                t_first = time.monotonic()
                 if on_first_token is not None:
                     on_first_token()
                 first_fired = True
@@ -88,23 +103,33 @@ class LlamaCppClient:
             if token_text:
                 tokens.append(token_text)
 
-            if data.get("stop"):
-                timings = data.get("timings", {})
-                tok_per_s = timings.get("predicted_per_second", 0.0)
-                tok_count = timings.get("predicted_n", len(tokens))
-                prompt_per_s = timings.get("prompt_per_second", 0.0)
-                prompt_tok = timings.get("prompt_n", 0)
-                stats = {
-                    "tok_per_s":    tok_per_s,
-                    "tok_count":    tok_count,
-                    "prompt_per_s": prompt_per_s,
-                    "prompt_tok":   prompt_tok,
-                }
-                logger.info(
-                    "llama.cpp done: %d tokens @ %.1f tok/s",
-                    tok_count, tok_per_s,
-                )
+            # usage is in the final chunk (finish_reason == "stop")
+            if finish_reason == "stop":
+                usage = data.get("usage", {})
                 break
+
+        t_end = time.monotonic()
+        tok_count = usage.get("completion_tokens", len(tokens))
+        prompt_tok = usage.get("prompt_tokens", 0)
+
+        # Compute tok/s from wall clock (llama.cpp doesn't return timings
+        # on the /v1/chat/completions endpoint)
+        gen_elapsed = t_end - (t_first or t_start)
+        tok_per_s = tok_count / gen_elapsed if gen_elapsed > 0 else 0.0
+
+        prompt_elapsed = (t_first or t_end) - t_start
+        prompt_per_s = prompt_tok / prompt_elapsed if prompt_elapsed > 0 else 0.0
+
+        stats = {
+            "tok_per_s":    tok_per_s,
+            "tok_count":    tok_count,
+            "prompt_tok":   prompt_tok,
+            "prompt_per_s": prompt_per_s,
+        }
+        logger.info(
+            "llama.cpp done: %d tokens @ %.1f tok/s  (prompt %d tok @ %.1f tok/s)",
+            tok_count, tok_per_s, prompt_tok, prompt_per_s,
+        )
 
         reply = "".join(tokens).strip()
         return reply, stats
