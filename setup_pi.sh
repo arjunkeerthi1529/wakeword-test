@@ -15,8 +15,16 @@ sudo apt-get install -y \
     libopenblas-dev \
     portaudio19-dev \
     libasound2-dev \
-    libgpiod2 \
     git curl
+
+# libgpiod was renamed between Bullseye (libgpiod2) and Bookworm (libgpiod3)
+if apt-cache show libgpiod2 &>/dev/null; then
+    sudo apt-get install -y libgpiod2
+elif apt-cache show libgpiod3 &>/dev/null; then
+    sudo apt-get install -y libgpiod3
+else
+    sudo apt-get install -y libgpiod-dev
+fi
 
 echo "=== [2/8] Python virtual environment ==="
 python3 -m venv "$VENV"
