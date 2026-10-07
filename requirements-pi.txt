@@ -3,6 +3,7 @@
 gpiozero
 RPi.GPIO
 
-# tflite-runtime is lighter than full onnxruntime on ARM (~50 MB vs ~350 MB).
-# openWakeWord switches to it automatically when inference_framework="tflite".
-tflite-runtime
+# onnxruntime has official ARM64 wheels on PyPI and works across Python 3.8-3.12.
+# tflite-runtime stopped publishing PyPI wheels after TFLite 2.14 — use onnx
+# backend for openWakeWord instead (same accuracy, reliable install on Pi).
+onnxruntime

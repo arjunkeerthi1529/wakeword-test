@@ -19,7 +19,7 @@ piper_voice: models/piper/en_US-lessac-low.onnx
 wake_word:
   model: hey_jarvis
   threshold: 0.5
-  backend: tflite         # tflite-runtime is lighter than onnxruntime on ARM
+  backend: onnx           # onnxruntime has reliable ARM64 wheels; tflite-runtime lacks Python 3.12 wheels
 
 gpio:
   mute_button_pin: 17
