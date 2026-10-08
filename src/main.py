@@ -167,6 +167,7 @@ def main() -> None:
         # Drain mic so speaker output doesn't contaminate next VAD window
         _flush(audio, gate, ECHO_FLUSH_S)
         gate.suppressed = False  # re-enable wake detection after echo clears
+        gate.extend_timeout()   # reset 30s window so follow-up gets full time
         hardware.set_indicator("listening")  # gate still open for follow-up
 
 

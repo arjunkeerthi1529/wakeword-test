@@ -44,6 +44,7 @@ class WakeGate:
         self._stop = threading.Event()
         self._on_wake = on_wake  # called on orchestrator when wake fires
         self.suppressed = False  # set True during TTS to block echo re-trigger
+        self._awake_since: Optional[float] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -68,8 +69,13 @@ class WakeGate:
     def sleep(self):
         """Return to waiting-for-wake state after an utterance is processed."""
         self._awake = False
+        self._awake_since = None
         self._detector.reset()
         logger.info("Wake gate sleeping — waiting for next wake word")
+
+    def extend_timeout(self):
+        """Reset the listen timeout — call after each reply so follow-up gets full window."""
+        self._awake_since = time.time()
 
     # ------------------------------------------------------------------
     # Consumer interface (called from stream_utterances)
@@ -96,36 +102,33 @@ class WakeGate:
 
     def _run_loop(self):
         leftover = np.array([], dtype=np.float32)
-        awake_since: Optional[float] = None
 
         while not self._stop.is_set():
             try:
                 block = self._raw_q.get(timeout=0.05)
             except queue.Empty:
                 # While awake, check listen timeout even when no new blocks arrive
-                if self._awake and awake_since and time.time() - awake_since > _LISTEN_TIMEOUT:
+                if self._awake and self._awake_since and time.time() - self._awake_since > _LISTEN_TIMEOUT:
                     logger.info("Listen timeout — no speech detected, resetting gate")
                     self.sleep()
-                    awake_since = None
                 continue
 
             flat = block.flatten().astype(np.float32)
 
             if self._awake:
                 # Gate is open — check listen timeout
-                if awake_since is None:
-                    awake_since = time.time()
-                if time.time() - awake_since > _LISTEN_TIMEOUT:
+                if self._awake_since is None:
+                    self._awake_since = time.time()
+                if time.time() - self._awake_since > _LISTEN_TIMEOUT:
                     logger.info("Listen timeout — no speech detected, resetting gate")
                     self.sleep()
-                    awake_since = None
                     continue
                 # Pass block straight through to VAD
                 self._out_q.put(flat.reshape(-1, 1))
                 continue
 
             # Gate is closed — reset timer
-            awake_since = None
+            self._awake_since = None
 
             # Skip detection while TTS is playing to prevent speaker echo re-trigger
             if self.suppressed:
@@ -160,7 +163,7 @@ class WakeGate:
                                 self._out_q.get_nowait()
                             except queue.Empty:
                                 break
-                        awake_since = time.time()  # reset timeout after greeting
+                        self._awake_since = time.time()  # reset timeout after greeting
                     # Forward the audio tail AFTER the wake chunk so the
                     # query that follows is captured from the start
                     tail = audio[offset + _CHUNK_SAMPLES:]
