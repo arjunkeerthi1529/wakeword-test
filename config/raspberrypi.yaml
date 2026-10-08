@@ -3,7 +3,7 @@ platform: raspberrypi
 # whisper.cpp binary compiled on Pi ARM — see setup_pi.sh for build steps.
 # tiny.en-q5_1 uses ~40 MB RAM and transcribes a 5s utterance in ~0.8-1.5s on Pi 4.
 stt_binary: /home/makeathon21/whisper.cpp/build/bin/whisper-cli
-stt_model: models/ggml-tiny.en-q5_1.bin
+stt_model: models/ggml-base.en.bin
 stt_threads: 3
 
 # llama.cpp server — already running with Qwen model.
