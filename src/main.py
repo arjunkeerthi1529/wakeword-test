@@ -42,8 +42,6 @@ ECHO_FLUSH_S     = 2.0    # drain mic after TTS to suppress speaker echo
 SILENCE_THRESH   = 0.012  # energy threshold for speech detection
 PAUSE_SECS       = 2.5    # silence after speech → send to LLM
 IDLE_TIMEOUT_S   = 30.0   # no speech in this window → close gate
-LIVE_CHUNK_N     = 10     # blocks between live preview (10 * 80ms = 800ms)
-
 # Sentence boundary: punctuation followed by space or end of string
 _SENT_RE = re.compile(r'(?<=[.!?])(?:\s+|$)')
 
@@ -157,7 +155,7 @@ def main() -> None:
             tracker.reset()
 
             _flush(audio, gate, ECHO_FLUSH_S)
-            gate.extend_timeout()
+            gate.reopen()   # ensure gate is open for follow-up even if timeout fired
 
 
 # ── Streaming listen ──────────────────────────────────────────────────────────
@@ -176,11 +174,10 @@ def _listen_streaming(
     Returns "" if no speech within IDLE_TIMEOUT_S.
     """
     blocks: list = []
-    live_buf: list = []
-    live_words: list = []
     last_speech_t: float = 0.0
     started = False
     start_t = time.monotonic()
+    dot_count = 0
 
     print("\r[listening] ", end="", flush=True)
 
@@ -199,21 +196,14 @@ def _listen_streaming(
 
         energy = float(np.abs(chunk).mean())
         blocks.append(chunk)
-        live_buf.append(chunk)
 
         if energy > SILENCE_THRESH:
             last_speech_t = time.monotonic()
-            started = True
-
-        # Live preview every LIVE_CHUNK_N * 80ms
-        if len(live_buf) >= LIVE_CHUNK_N:
-            chunk_audio = np.concatenate(live_buf).flatten()
-            live_buf = []
-            if started:
-                words = stt.transcribe_chunk(chunk_audio)
-                if words:
-                    live_words.append(words)
-                    print(f"\r[listening] {' '.join(live_words)}", end="", flush=True)
+            if not started:
+                started = True
+            # Animate dots to show voice is being captured
+            dot_count = (dot_count % 5) + 1
+            print(f"\r[listening] {'.' * dot_count}     ", end="", flush=True)
 
         if started and time.monotonic() - last_speech_t > PAUSE_SECS:
             break

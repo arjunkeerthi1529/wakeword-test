@@ -77,6 +77,12 @@ class WakeGate:
         """Reset the listen timeout — call after each reply so follow-up gets full window."""
         self._awake_since = time.time()
 
+    def reopen(self):
+        """Force gate open again — call after STT/LLM pipeline to allow follow-up."""
+        self._awake = True
+        self._awake_since = time.time()
+        self._detector.reset()
+
     # ------------------------------------------------------------------
     # Consumer interface (called from stream_utterances)
     # ------------------------------------------------------------------
