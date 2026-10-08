@@ -37,6 +37,12 @@ class LlamaCppClient:
 
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
+        self._history: list = []   # conversation turns: [{role, content}, ...]
+
+    def reset_history(self) -> None:
+        """Clear conversation history — call when starting a new conversation."""
+        self._history = []
+        logger.info("Conversation history cleared")
 
     def chat(
         self,
@@ -44,11 +50,14 @@ class LlamaCppClient:
         on_first_token: Optional[Callable[[], None]] = None,
         on_token: Optional[Callable[[str], None]] = None,
     ) -> Tuple[str, Dict]:
+        # Append user turn to history
+        self._history.append({"role": "user", "content": user_text})
+
         payload = {
             "model": "local",           # llama.cpp ignores this, uses loaded model
             "messages": [
                 {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user",   "content": user_text},
+                *self._history,         # full conversation history
             ],
             "stream": True,
             "temperature": 0.7,
@@ -139,4 +148,13 @@ class LlamaCppClient:
         )
 
         reply = "".join(tokens).strip()
+
+        # Save assistant reply to history for context in follow-up turns
+        if reply:
+            self._history.append({"role": "assistant", "content": reply})
+
+        # Trim history to last 10 turns to stay within context window
+        if len(self._history) > 20:
+            self._history = self._history[-20:]
+
         return reply, stats

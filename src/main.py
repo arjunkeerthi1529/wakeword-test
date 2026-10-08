@@ -114,6 +114,7 @@ def main() -> None:
             continue
 
         # ── Wake fired ────────────────────────────────────────────────────
+        llm.reset_history()   # fresh conversation context on each wake
         gate.suppressed = True
         tts.speak("Hey, what's up?")
         _flush(audio, gate, ECHO_FLUSH_S)
