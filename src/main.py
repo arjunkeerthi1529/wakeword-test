@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 CSV_LOG = Path("latency_log.csv")
 FOLLOW_UP_WINDOW_S = 15.0   # gate stays open this long after each reply
-ECHO_FLUSH_S = 0.8          # drain mic after TTS to suppress speaker echo
+ECHO_FLUSH_S = 2.0          # drain mic after TTS to suppress speaker echo
 
 
 def main() -> None:
@@ -101,8 +101,10 @@ def main() -> None:
 
         # Wake sentinel: gate just opened — play greeting and drain mic echo
         if segment is None:
+            gate.suppressed = True
             tts.speak("Hey, what's up?")
             _flush(audio, gate, ECHO_FLUSH_S)
+            gate.suppressed = False
             continue
 
         # Follow-up window expired with no speech — return to wake detection
@@ -148,6 +150,7 @@ def main() -> None:
 
         # ── TTS play ──────────────────────────────────────────────────────
         hardware.set_indicator("speaking")
+        gate.suppressed = True   # block wake detector during playback
         tts.play(audio_data, sr)
         tracker.mark("tts_play_done")
 
@@ -163,6 +166,7 @@ def main() -> None:
 
         # Drain mic so speaker output doesn't contaminate next VAD window
         _flush(audio, gate, ECHO_FLUSH_S)
+        gate.suppressed = False  # re-enable wake detection after echo clears
         hardware.set_indicator("listening")  # gate still open for follow-up
 
 

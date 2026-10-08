@@ -43,6 +43,7 @@ class WakeGate:
         self._awake = False
         self._stop = threading.Event()
         self._on_wake = on_wake  # called on orchestrator when wake fires
+        self.suppressed = False  # set True during TTS to block echo re-trigger
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -125,6 +126,11 @@ class WakeGate:
 
             # Gate is closed — reset timer
             awake_since = None
+
+            # Skip detection while TTS is playing to prevent speaker echo re-trigger
+            if self.suppressed:
+                leftover = np.array([], dtype=np.float32)
+                continue
 
             # Scan the block in 80 ms chunks for the wake word
             audio = np.concatenate([leftover, flat]) if len(leftover) else flat
