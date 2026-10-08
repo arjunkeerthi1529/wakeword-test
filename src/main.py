@@ -143,7 +143,6 @@ def main() -> None:
             gate.suppressed = True
             hardware.set_indicator("thinking")
             reply, stats = _stream_reply_with_tts(llm, tts, text, tracker, hardware)
-            gate.suppressed = False
 
             # ── Latency report ────────────────────────────────────────────
             tracker.report(
@@ -155,7 +154,11 @@ def main() -> None:
             )
             tracker.reset()
 
+            # Keep wake detection suppressed until echo is drained — clearing
+            # it before the flush lets the speaker's own TTS tail re-trigger
+            # the wake word (false wake on Jarvis's own voice).
             _flush(audio, gate, ECHO_FLUSH_S)
+            gate.suppressed = False
             gate.reopen()   # ensure gate is open for follow-up even if timeout fired
 
 

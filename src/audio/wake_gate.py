@@ -113,8 +113,11 @@ class WakeGate:
             try:
                 block = self._raw_q.get(timeout=0.05)
             except queue.Empty:
-                # While awake, check listen timeout even when no new blocks arrive
-                if self._awake and self._awake_since and time.time() - self._awake_since > _LISTEN_TIMEOUT:
+                # While awake, check listen timeout even when no new blocks arrive.
+                # Skip while suppressed — STT/LLM/TTS processing can easily run
+                # longer than the timeout and shouldn't close the gate mid-turn.
+                if (self._awake and self._awake_since and not self.suppressed
+                        and time.time() - self._awake_since > _LISTEN_TIMEOUT):
                     logger.info("Listen timeout — no speech detected, resetting gate")
                     self.sleep()
                 continue
@@ -122,10 +125,12 @@ class WakeGate:
             flat = block.flatten().astype(np.float32)
 
             if self._awake:
-                # Gate is open — check listen timeout
+                # Gate is open — check listen timeout (skip while suppressed;
+                # STT/LLM/TTS processing can run longer than the timeout and
+                # shouldn't close the gate mid-turn)
                 if self._awake_since is None:
                     self._awake_since = time.time()
-                if time.time() - self._awake_since > _LISTEN_TIMEOUT:
+                if not self.suppressed and time.time() - self._awake_since > _LISTEN_TIMEOUT:
                     logger.info("Listen timeout — no speech detected, resetting gate")
                     self.sleep()
                     continue
