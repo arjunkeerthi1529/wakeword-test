@@ -1,18 +1,24 @@
 """pi-voice-assistant — main entry point.
 
-Full pipeline on Raspberry Pi 4:
-    openWakeWord ("Hey Jarvis") -> whisper.cpp STT -> llama.cpp LLM -> Piper TTS
+Real-time conversation pipeline on Raspberry Pi 4:
+  openWakeWord ("Hey Jarvis")
+    → live streaming STT (tiny.en preview + small.en final)
+    → llama.cpp LLM (streaming tokens)
+    → sentence-by-sentence Piper TTS (plays while LLM still generating)
 
-Per-stage latency is printed after every interaction and appended to
-latency_log.csv for offline analysis.
+Per-stage latency printed after every turn and appended to latency_log.csv.
 
 Run with:
     python -m src.main
 """
 import logging
 import queue as _queue
+import re
+import threading
 import time
 from pathlib import Path
+
+import numpy as np
 
 from .audio.capture import AudioCapture, SILENCE_TIMEOUT
 from .audio.wake_gate import WakeGate
@@ -31,16 +37,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-CSV_LOG = Path("latency_log.csv")
-FOLLOW_UP_WINDOW_S = 30.0   # gate stays open this long after each reply
-ECHO_FLUSH_S = 2.0          # drain mic after TTS to suppress speaker echo
+CSV_LOG          = Path("latency_log.csv")
+ECHO_FLUSH_S     = 2.0    # drain mic after TTS to suppress speaker echo
+SILENCE_THRESH   = 0.012  # energy threshold for speech detection
+PAUSE_SECS       = 2.5    # silence after speech → send to LLM
+IDLE_TIMEOUT_S   = 30.0   # no speech in this window → close gate
+LIVE_CHUNK_N     = 10     # blocks between live preview (10 * 80ms = 800ms)
+
+# Sentence boundary: punctuation followed by space or end of string
+_SENT_RE = re.compile(r'(?<=[.!?])(?:\s+|$)')
 
 
 def main() -> None:
     cfg = get_config()
-    logger.info("Config loaded — llm=%s  stt=%s  wake=%s/%s",
-                cfg.llm_base_url, cfg.stt_model_name,
-                cfg.wake_model, cfg.wake_backend)
+    logger.info("Config loaded — llm=%s  stt=%s  wake=%s",
+                cfg.llm_base_url, cfg.stt_model_name, cfg.wake_model)
 
     # ── Hardware ──────────────────────────────────────────────────────────
     try:
@@ -49,16 +60,15 @@ def main() -> None:
             listening_led_pin=cfg.gpio_listen_led_pin,
             online_led_pin=cfg.gpio_online_led_pin,
         )
-        logger.info("GPIO initialised — button on pin %d", cfg.gpio_mute_pin)
     except Exception as e:
         logger.warning("GPIO unavailable (%s) — falling back to NullHardwareIO", e)
         hardware = NullHardwareIO()
 
-    # ── Audio (80 ms blocks = openWakeWord's native chunk size) ───────────
+    # ── Audio ─────────────────────────────────────────────────────────────
     audio = AudioCapture(
         hardware=hardware,
         block_duration=0.08,
-        silence_threshold=0.012,
+        silence_threshold=SILENCE_THRESH,
         silence_duration_s=0.6,
     )
 
@@ -81,7 +91,7 @@ def main() -> None:
     # ── STT / LLM / TTS ───────────────────────────────────────────────────
     stt = WhisperEngine(model_name=cfg.stt_model_name)
     llm = LlamaCppClient(base_url=cfg.llm_base_url)
-    tts = PiperEngine(model_path=cfg.piper_voice)   # warmup phrases pre-synthesized here
+    tts = PiperEngine(model_path=cfg.piper_voice)
 
     # ── Start ─────────────────────────────────────────────────────────────
     hardware.start()
@@ -90,83 +100,220 @@ def main() -> None:
     logger.info("Ready — say '%s' to start.", cfg.wake_model.replace("_", " "))
 
     # ── Main loop ─────────────────────────────────────────────────────────
-    for segment in audio.stream_utterances(follow_up_window_s=FOLLOW_UP_WINDOW_S):
+    for segment in audio.stream_utterances(follow_up_window_s=IDLE_TIMEOUT_S):
 
         if hardware.muted:
             continue
 
-        # Wake sentinel: gate just opened — play greeting and drain mic echo
-        if segment is None:
-            gate.suppressed = True
-            tts.speak("Hey, what's up?")
-            _flush(audio, gate, ECHO_FLUSH_S)
-            gate.suppressed = False
-            continue
-
-        # Follow-up window expired with no speech — return to wake detection
         if segment is SILENCE_TIMEOUT:
             gate.sleep()
-            _flush(audio, gate, ECHO_FLUSH_S)
             hardware.set_indicator("waiting_for_wake")
             tracker.reset()
             continue
 
-        # ── STT ───────────────────────────────────────────────────────────
-        tracker.mark("speech_end")
-        gate.suppressed = True   # suppress wake during processing
-        hardware.set_indicator("thinking")
-        dur_s = len(segment) / 16_000
-        logger.info("Utterance captured (%.2fs audio) — transcribing…", dur_s)
-
-        text = stt.transcribe(segment)
-        tracker.mark("stt_done")
-        logger.info("STT: %r", text)
-
-        if not text.strip() or "[blank_audio]" in text.lower():
-            logger.warning("STT returned empty/blank — skipping turn")
-            hardware.set_indicator("listening")
-            tracker.reset()
+        if segment is not None:
+            # Should not reach here in streaming mode — handled inside wake block
             continue
 
-        # ── LLM (streaming) ───────────────────────────────────────────────
-        logger.info("Querying llama.cpp (%s)…", cfg.llm_base_url)
-
-        def _on_first_token() -> None:
-            tracker.mark("llm_first_token")
-
-        reply, stats = llm.chat(text, on_first_token=_on_first_token)
-        tracker.mark("llm_done")
-        logger.info("LLM reply: %r", reply)
-
-        if not reply:
-            reply = "I'm sorry, I couldn't form a response."
-
-        # ── TTS synthesize ────────────────────────────────────────────────
-        audio_data, sr = tts.synthesize(reply)
-        tracker.mark("tts_synth_done")
-
-        # ── TTS play ──────────────────────────────────────────────────────
-        hardware.set_indicator("speaking")
-        gate.suppressed = True   # block wake detector during playback
-        tts.play(audio_data, sr)
-        tracker.mark("tts_play_done")
-
-        # ── Latency report ────────────────────────────────────────────────
-        tracker.report(
-            tok_per_s=stats.get("tok_per_s", 0.0),
-            tok_count=stats.get("tok_count", 0),
-            prompt_tok=stats.get("prompt_tok", 0),
-            prompt_per_s=stats.get("prompt_per_s", 0.0),
-            log_csv=CSV_LOG if cfg.log_latency_csv else None,
-        )
-        tracker.reset()
-
-        # Drain mic so speaker output doesn't contaminate next VAD window
+        # ── Wake fired ────────────────────────────────────────────────────
+        gate.suppressed = True
+        tts.speak("Hey, what's up?")
         _flush(audio, gate, ECHO_FLUSH_S)
-        gate.suppressed = False  # re-enable wake detection after echo clears
-        gate.extend_timeout()   # reset 30s window so follow-up gets full time
-        hardware.set_indicator("listening")  # gate still open for follow-up
+        gate.suppressed = False
+        gate.extend_timeout()
 
+        # ── Conversation loop (follow-up without re-waking) ───────────────
+        while True:
+            hardware.set_indicator("listening")
+            text = _listen_streaming(gate, stt, hardware, tracker)
+
+            if not text or "[blank_audio]" in text.lower():
+                logger.info("No speech detected — returning to wake detection")
+                gate.sleep()
+                hardware.set_indicator("waiting_for_wake")
+                tracker.reset()
+                break
+
+            logger.info("STT final: %r", text)
+
+            if not text.strip():
+                tracker.reset()
+                continue
+
+            # ── LLM + sentence-streaming TTS ──────────────────────────────
+            gate.suppressed = True
+            hardware.set_indicator("thinking")
+            reply, stats = _stream_reply_with_tts(llm, tts, text, tracker, hardware)
+            gate.suppressed = False
+
+            # ── Latency report ────────────────────────────────────────────
+            tracker.report(
+                tok_per_s=stats.get("tok_per_s", 0.0),
+                tok_count=stats.get("tok_count", 0),
+                prompt_tok=stats.get("prompt_tok", 0),
+                prompt_per_s=stats.get("prompt_per_s", 0.0),
+                log_csv=CSV_LOG if cfg.log_latency_csv else None,
+            )
+            tracker.reset()
+
+            _flush(audio, gate, ECHO_FLUSH_S)
+            gate.extend_timeout()
+
+
+# ── Streaming listen ──────────────────────────────────────────────────────────
+
+def _listen_streaming(
+    gate: WakeGate,
+    stt: WhisperEngine,
+    hardware,
+    tracker: LatencyTracker,
+) -> str:
+    """Read audio chunks from gate, display live preview, return accurate text.
+
+    Words appear in-place on terminal as the user speaks.
+    After PAUSE_SECS of silence following speech, captures full audio and
+    runs accurate small.en transcription for the LLM.
+    Returns "" if no speech within IDLE_TIMEOUT_S.
+    """
+    blocks: list = []
+    live_buf: list = []
+    live_words: list = []
+    last_speech_t: float = 0.0
+    started = False
+    start_t = time.monotonic()
+
+    print("\r[listening] ", end="", flush=True)
+
+    while True:
+        # Hard timeout — no speech at all
+        if not started and time.monotonic() - start_t > IDLE_TIMEOUT_S:
+            print()
+            return ""
+
+        chunk = gate.get_block(timeout=0.2)
+
+        if chunk is None:
+            if started and time.monotonic() - last_speech_t > PAUSE_SECS:
+                break
+            continue
+
+        energy = float(np.abs(chunk).mean())
+        blocks.append(chunk)
+        live_buf.append(chunk)
+
+        if energy > SILENCE_THRESH:
+            last_speech_t = time.monotonic()
+            started = True
+
+        # Live preview every LIVE_CHUNK_N * 80ms
+        if len(live_buf) >= LIVE_CHUNK_N:
+            chunk_audio = np.concatenate(live_buf).flatten()
+            live_buf = []
+            if started:
+                words = stt.transcribe_chunk(chunk_audio)
+                if words:
+                    live_words.append(words)
+                    print(f"\r[listening] {' '.join(live_words)}", end="", flush=True)
+
+        if started and time.monotonic() - last_speech_t > PAUSE_SECS:
+            break
+
+    print()  # newline after live display
+
+    if not blocks or not started:
+        return ""
+
+    tracker.mark("speech_end")
+    hardware.set_indicator("thinking")
+
+    full_audio = np.concatenate(blocks).flatten()
+    logger.info("Transcribing %.2fs of audio…", len(full_audio) / 16_000)
+    text = stt.transcribe(full_audio)
+    tracker.mark("stt_done")
+    return text
+
+
+# ── Sentence-streaming TTS ────────────────────────────────────────────────────
+
+def _split_sentence(buffer: str):
+    """Return (first_complete_sentence_or_clause, remainder) or (None, buffer)."""
+    m = re.search(r'[.!?](?:\s|$)', buffer)
+    if m:
+        end = m.end()
+        return buffer[:end].strip(), buffer[end:].lstrip()
+    # Long clause with comma — flush early so TTS doesn't lag
+    if len(buffer) > 60:
+        m2 = re.search(r'[,;]\s', buffer)
+        if m2:
+            end = m2.end()
+            return buffer[:end].strip(), buffer[end:].lstrip()
+    return None, buffer
+
+
+def _stream_reply_with_tts(
+    llm: LlamaCppClient,
+    tts: PiperEngine,
+    text: str,
+    tracker: LatencyTracker,
+    hardware,
+):
+    """Stream LLM tokens → detect sentence boundaries → play each sentence
+    concurrently so TTS starts while LLM is still generating the rest."""
+
+    tts_q: "_queue.Queue[str | None]" = _queue.Queue()
+    first_synth = [True]
+
+    def tts_worker():
+        while True:
+            item = tts_q.get()
+            if item is None:
+                break
+            audio_data, sr = tts.synthesize(item)
+            if first_synth[0]:
+                first_synth[0] = False
+                tracker.mark("tts_synth_done")
+            hardware.set_indicator("speaking")
+            tts.play(audio_data, sr)
+
+    worker = threading.Thread(target=tts_worker, daemon=True)
+    worker.start()
+
+    buffer = ""
+    printed_reply = []
+
+    def on_first_token():
+        tracker.mark("llm_first_token")
+
+    def on_token(token: str):
+        nonlocal buffer
+        buffer += token
+        sentence, buffer = _split_sentence(buffer)
+        if sentence:
+            printed_reply.append(sentence)
+            print(f"\r[Jarvis] {sentence}", flush=True)
+            tts_q.put(sentence)
+
+    logger.info("Querying llama.cpp (%s)…", llm.base_url)
+    reply, stats = llm.chat(text, on_first_token=on_first_token, on_token=on_token)
+    tracker.mark("llm_done")
+
+    # Flush any trailing text that didn't hit a sentence boundary
+    if buffer.strip():
+        sentence = buffer.strip()
+        printed_reply.append(sentence)
+        print(f"\r[Jarvis] {sentence}", flush=True)
+        tts_q.put(sentence)
+
+    tts_q.put(None)   # stop TTS worker
+    worker.join()     # wait for last sentence to finish playing
+    tracker.mark("tts_play_done")
+
+    full_reply = reply or " ".join(printed_reply)
+    logger.info("Full reply: %r", full_reply)
+    return full_reply, stats
+
+
+# ── Echo flush ────────────────────────────────────────────────────────────────
 
 def _flush(audio: AudioCapture, gate: WakeGate, duration_s: float) -> None:
     """Drain mic and gate queues for duration_s to suppress TTS echo."""

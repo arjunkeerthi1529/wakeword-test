@@ -42,6 +42,7 @@ class LlamaCppClient:
         self,
         user_text: str,
         on_first_token: Optional[Callable[[], None]] = None,
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> Tuple[str, Dict]:
         payload = {
             "model": "local",           # llama.cpp ignores this, uses loaded model
@@ -106,6 +107,8 @@ class LlamaCppClient:
 
             if token_text:
                 tokens.append(token_text)
+                if on_token is not None:
+                    on_token(token_text)
 
             # usage is in the final chunk (finish_reason == "stop")
             if finish_reason == "stop":
