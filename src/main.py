@@ -113,6 +113,7 @@ def main() -> None:
 
         # ── STT ───────────────────────────────────────────────────────────
         tracker.mark("speech_end")
+        gate.suppressed = True   # suppress wake during processing
         hardware.set_indicator("thinking")
         dur_s = len(segment) / 16_000
         logger.info("Utterance captured (%.2fs audio) — transcribing…", dur_s)
