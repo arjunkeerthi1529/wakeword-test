@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 CSV_LOG = Path("latency_log.csv")
-FOLLOW_UP_WINDOW_S = 15.0   # gate stays open this long after each reply
+FOLLOW_UP_WINDOW_S = 30.0   # gate stays open this long after each reply
 ECHO_FLUSH_S = 2.0          # drain mic after TTS to suppress speaker echo
 
 

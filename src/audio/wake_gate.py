@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 # openWakeWord processes audio in 80 ms frames at 16 kHz
 _CHUNK_SAMPLES = 1280
 # How long to stay awake waiting for speech before auto-resetting
-_LISTEN_TIMEOUT = 15.0
+_LISTEN_TIMEOUT = 30.0
 
 
 class WakeGate:
