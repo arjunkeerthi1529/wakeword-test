@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 
 CSV_LOG          = Path("latency_log.csv")
 ECHO_FLUSH_S     = 2.0    # drain mic after TTS to suppress speaker echo
-SILENCE_THRESH   = 0.008  # energy threshold for speech detection
-PAUSE_SECS       = 2.5    # silence after speech → send to LLM
+SILENCE_THRESH   = 0.012  # energy threshold for speech detection (above ambient noise floor)
+PAUSE_SECS       = 1.3    # silence after speech → send to LLM
 IDLE_TIMEOUT_S   = 30.0   # no speech in this window → close gate
 # Sentence boundary: punctuation followed by space or end of string
 _SENT_RE = re.compile(r'(?<=[.!?])(?:\s+|$)')
@@ -183,6 +183,15 @@ def _listen_streaming(
     print("\r[listening] ", end="", flush=True)
 
     while True:
+        # Gate closed internally (its own listen timeout fired) — stop
+        # collecting immediately instead of silently spanning into a
+        # later re-wake cycle's audio.
+        if not gate._awake:
+            if started:
+                break
+            print()
+            return ""
+
         # Hard timeout — no speech at all
         if not started and time.monotonic() - start_t > IDLE_TIMEOUT_S:
             print()
