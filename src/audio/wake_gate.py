@@ -44,6 +44,7 @@ class WakeGate:
         self._stop = threading.Event()
         self._on_wake = on_wake  # called on orchestrator when wake fires
         self.suppressed = False  # set True during TTS to block echo re-trigger
+        self.paused = False      # set True while a scam-monitoring call session is active
         self._awake_since: Optional[float] = None
 
     # ------------------------------------------------------------------
@@ -120,6 +121,10 @@ class WakeGate:
                         and time.time() - self._awake_since > _LISTEN_TIMEOUT):
                     logger.info("Listen timeout — no speech detected, resetting gate")
                     self.sleep()
+                continue
+
+            if self.paused:
+                leftover = np.array([], dtype=np.float32)
                 continue
 
             flat = block.flatten().astype(np.float32)

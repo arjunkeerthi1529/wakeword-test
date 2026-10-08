@@ -79,3 +79,12 @@ class PiHardwareIO(HardwareIO):
             self._listen_led.on()
         else:  # "waiting_for_wake", "muted", unknown
             self._listen_led.off()
+
+    def set_warning(self, level: str):
+        """Scam-warning LED on GPIO22: solid for warn, slow blink for watch."""
+        if level == "warn":
+            self._online_led.on()
+        elif level == "watch":
+            self._online_led.blink(on_time=0.5, off_time=0.5)
+        else:
+            self._online_led.off()

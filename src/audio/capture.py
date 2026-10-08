@@ -44,6 +44,7 @@ class AudioCapture:
         self.silence_threshold = silence_threshold
         self.silence_blocks = max(1, int(silence_duration_s / block_duration))
         self._q: "queue.Queue[np.ndarray]" = queue.Queue()
+        self._listeners: "list[queue.Queue[np.ndarray]]" = []
         self._wake_gate: Optional["WakeGate"] = None
         self._on_energy = None
 
@@ -53,10 +54,23 @@ class AudioCapture:
     def set_energy_callback(self, cb):
         self._on_energy = cb
 
+    def add_listener(self) -> "queue.Queue[np.ndarray]":
+        """Extra consumer of raw mic blocks (after the mute check)."""
+        q: "queue.Queue[np.ndarray]" = queue.Queue()
+        self._listeners.append(q)
+        return q
+
+    def remove_listener(self, q: "queue.Queue[np.ndarray]") -> None:
+        if q in self._listeners:
+            self._listeners.remove(q)
+
     def _callback(self, indata, frames, time_info, status):
         if self.hardware.muted:
             return
-        self._q.put(indata.copy())
+        block = indata.copy()
+        self._q.put(block)
+        for q in self._listeners:
+            q.put(block)
 
     def _get_block(self, timeout: float = 1.0) -> Optional[np.ndarray]:
         if self._wake_gate is not None:

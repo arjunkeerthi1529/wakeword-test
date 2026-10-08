@@ -44,6 +44,39 @@ class LlamaCppClient:
         self._history = []
         logger.info("Conversation history cleared")
 
+    def complete_json(
+        self,
+        system: str,
+        user: str,
+        schema: dict,
+        max_tokens: int = 80,
+        timeout: float = 30.0,
+    ) -> str:
+        """Stateless single-shot request constrained to a JSON schema.
+        Never touches the assistant's conversation history."""
+        payload = {
+            "model": "local",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+            "temperature": 0.1,
+            "max_tokens": max_tokens,
+            "cache_prompt": True,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "result", "schema": schema},
+            },
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        resp = requests.post(
+            f"{self.base_url}/v1/chat/completions", json=payload, timeout=timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"].get("content", "") or ""
+
     def chat(
         self,
         user_text: str,
