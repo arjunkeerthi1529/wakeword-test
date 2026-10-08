@@ -39,7 +39,7 @@ ECHO_FLUSH_S = 2.0          # drain mic after TTS to suppress speaker echo
 def main() -> None:
     cfg = get_config()
     logger.info("Config loaded — llm=%s  stt=%s  wake=%s/%s",
-                cfg.llm_base_url, Path(cfg.stt_model).name,
+                cfg.llm_base_url, cfg.stt_model_name,
                 cfg.wake_model, cfg.wake_backend)
 
     # ── Hardware ──────────────────────────────────────────────────────────
@@ -79,11 +79,7 @@ def main() -> None:
     audio.set_wake_gate(gate)
 
     # ── STT / LLM / TTS ───────────────────────────────────────────────────
-    stt = WhisperEngine(
-        binary=cfg.stt_binary,
-        model=cfg.stt_model,
-        n_threads=cfg.stt_threads,
-    )
+    stt = WhisperEngine(model_name=cfg.stt_model_name)
     llm = LlamaCppClient(base_url=cfg.llm_base_url)
     tts = PiperEngine(model_path=cfg.piper_voice)   # warmup phrases pre-synthesized here
 

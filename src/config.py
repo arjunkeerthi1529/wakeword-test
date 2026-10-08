@@ -12,9 +12,7 @@ _config: Optional["Config"] = None
 
 @dataclass
 class Config:
-    stt_binary:          str
-    stt_model:           str
-    stt_threads:         int
+    stt_model_name:      str       # faster-whisper model: tiny.en, base.en, small.en
     llm_base_url:        str       # llama.cpp server URL e.g. http://localhost:8080
     piper_voice:         str
     wake_model:          str
@@ -43,9 +41,7 @@ def get_config() -> Config:
         return str(p) if p.is_absolute() else str(ROOT_DIR / p)
 
     _config = Config(
-        stt_binary=os.getenv("STT_BINARY", raw["stt_binary"]),
-        stt_model=_resolve(os.getenv("STT_MODEL", raw["stt_model"])),
-        stt_threads=int(os.getenv("STT_THREADS", raw.get("stt_threads", 3))),
+        stt_model_name=os.getenv("STT_MODEL_NAME", raw.get("stt_model_name", "small.en")),
         llm_base_url=os.getenv("LLM_BASE_URL",
                                raw.get("llm_base_url", "http://localhost:8080")),
         piper_voice=_resolve(os.getenv("PIPER_VOICE", raw["piper_voice"])),
