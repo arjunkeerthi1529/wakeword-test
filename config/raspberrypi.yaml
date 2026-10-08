@@ -17,7 +17,7 @@ piper_voice: models/piper/en_US-lessac-low.onnx
 
 wake_word:
   model: hey_jarvis
-  threshold: 0.4
+  threshold: 0.2
   backend: onnx           # set to "auto" if onnx init fails on Python 3.13
 
 gpio:
