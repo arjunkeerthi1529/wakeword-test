@@ -58,7 +58,7 @@ def main() -> None:
     audio = AudioCapture(
         hardware=hardware,
         block_duration=0.08,
-        silence_threshold=0.008,
+        silence_threshold=0.012,
         silence_duration_s=0.6,
     )
 
