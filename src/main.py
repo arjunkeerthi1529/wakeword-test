@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 CSV_LOG          = Path("latency_log.csv")
 ECHO_FLUSH_S     = 2.0    # drain mic after TTS to suppress speaker echo
-SILENCE_THRESH   = 0.012  # energy threshold for speech detection
+SILENCE_THRESH   = 0.008  # energy threshold for speech detection
 PAUSE_SECS       = 2.5    # silence after speech → send to LLM
 IDLE_TIMEOUT_S   = 30.0   # no speech in this window → close gate
 # Sentence boundary: punctuation followed by space or end of string
