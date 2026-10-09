@@ -29,16 +29,47 @@ class WakeWordDetector:
         self._last_log = 0.0
         self._max_since_log = 0.0
         logger.info("Loading wake word model '%s' (framework=%s)", model_name, inference_framework)
+        self.model = self._load_model(model_name, inference_framework)
+        logger.info("Wake word model ready — threshold=%.2f", threshold)
+
+    @staticmethod
+    def _load_model(model_name: str, inference_framework: str):
+        """Try multiple Model() call signatures to handle API changes across versions.
+
+        openwakeword >=0.6.1 has a bug where wakeword_models leaks into
+        AudioFeatures.__init__() kwargs. Pin to ==0.6.0 in requirements.txt,
+        but keep fallbacks here for robustness.
+        """
+        # Preferred: named args with framework (openwakeword 0.6.0)
         try:
-            self.model = Model(
+            return Model(
                 wakeword_models=[model_name],
                 inference_framework=inference_framework,
             )
         except TypeError:
-            # Older openwakeword versions don't accept inference_framework as kwarg
-            logger.warning("inference_framework kwarg failed — retrying without it")
-            self.model = Model(wakeword_models=[model_name])
-        logger.info("Wake word model ready — threshold=%.2f", threshold)
+            pass
+
+        # Fallback 1: no inference_framework (older versions)
+        try:
+            logger.warning("inference_framework kwarg unsupported — retrying without it")
+            return Model(wakeword_models=[model_name])
+        except TypeError:
+            pass
+
+        # Fallback 2: buggy versions where wakeword_models leaks into AudioFeatures.
+        # Load preprocessor first, then attach models manually.
+        logger.warning("wakeword_models kwarg unsupported — loading model via path fallback")
+        m = Model()
+        import openwakeword
+        import os
+        # Resolve model path: built-in name or explicit file path
+        if os.path.isfile(model_name):
+            model_path = model_name
+        else:
+            oww_dir = os.path.dirname(openwakeword.__file__)
+            model_path = os.path.join(oww_dir, "resources", "models", f"{model_name}.onnx")
+        m.load_model(model_path)
+        return m
 
     def detect(self, audio_f32: np.ndarray) -> bool:
         """Feed a float32 [-1, 1] chunk; returns True if wake word fires."""

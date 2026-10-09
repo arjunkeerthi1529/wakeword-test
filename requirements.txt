@@ -3,4 +3,4 @@ sounddevice
 numpy
 piper-tts
 requests
-openwakeword
+openwakeword==0.6.0
