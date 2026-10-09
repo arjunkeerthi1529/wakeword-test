@@ -22,7 +22,7 @@ tts_output_device: ""
 # Play speech through `aplay -D <device>` — the same ALSA route as running aplay by hand — instead
 # of the Python audio library. Use "plughw:3,0" (card number from `aplay -l`) or "auto" to pick the
 # Jabra/USB card automatically. Takes precedence over tts_output_device.
-tts_aplay_device: ""
+tts_aplay_device: auto
 
 wake_word:
   model: hey_jarvis
