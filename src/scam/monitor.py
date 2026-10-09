@@ -345,6 +345,8 @@ class ScamMonitor:
             if transport_error is not None:
                 logger.warning("LLM review failed: %s", transport_error)
                 self._llm_failing = True
+                session.last_dispatch = time.monotonic() + 20.0   # retry in ~cadence+20s, not every tick
+                self._review_soon = False
                 self._emit("processing", session=session, active=False,
                            message="Analysis delayed — rule-based warnings still active")
             else:

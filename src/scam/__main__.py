@@ -28,6 +28,7 @@ def main() -> None:
     logger.info("Scam Guard starting — stt=%s  llm=%s", cfg.stt_model, cfg.llm_base_url)
 
     stt = ScamSTT(cfg.stt_model, cfg.stt_threads)
+    stt.warmup()
     server = ScamServer(cfg)
     server.monitor = ScamMonitor(
         cfg, MicSource(cfg.mic_device), stt, ScamLLM(cfg.llm_base_url),

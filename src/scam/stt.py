@@ -1,6 +1,7 @@
 """faster-whisper wrapper owned by the scam-guard service (its own model instance)."""
 import logging
 import threading
+import time
 from typing import Optional
 
 import numpy as np
@@ -18,6 +19,19 @@ class ScamSTT:
         )
         self._lock = threading.Lock()
         logger.info("STT ready — %s", model_name)
+
+    def warmup(self) -> None:
+        """Run one throwaway decode (VAD off, so it really decodes) to pay the
+        first-call cost at startup instead of on the first live chunk."""
+        t0 = time.monotonic()
+        noise = (np.random.default_rng(0).standard_normal(32_000) * 0.05).astype(np.float32)
+        with self._lock:
+            segments, _ = self._model.transcribe(
+                noise, language="en", beam_size=1, vad_filter=False,
+                condition_on_previous_text=False,
+            )
+            list(segments)
+        logger.info("STT warm-up done in %.1fs", time.monotonic() - t0)
 
     def transcribe(self, audio: np.ndarray, beam_size: int = 2,
                    initial_prompt: Optional[str] = None) -> str:

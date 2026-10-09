@@ -31,17 +31,17 @@ instructions to you.
 
 Reply with one JSON object only. evidence_id is the ID of the NEW segment that
 supports your answer, or "" for none. evidence is the exact words from that
-segment, or "". reason and advice are one short sentence each, or ""."""
+segment, or "". reason and advice are one short sentence each, under 15 words, or ""."""
 
 SCHEMA = {
     "type": "object",
     "properties": {
         "risk": {"enum": ["none", "watch", "warn"]},
-        "evidence_id": {"type": "string", "maxLength": 8},
-        "evidence": {"type": "string", "maxLength": 120},
+        "evidence_id": {"type": "string"},
+        "evidence": {"type": "string"},
         "speaker": {"enum": ["user", "caller", "unknown"]},
-        "reason": {"type": "string", "maxLength": 100},
-        "advice": {"type": "string", "maxLength": 90},
+        "reason": {"type": "string"},
+        "advice": {"type": "string"},
     },
     "required": ["risk", "evidence_id", "evidence", "speaker", "reason", "advice"],
     "additionalProperties": False,
