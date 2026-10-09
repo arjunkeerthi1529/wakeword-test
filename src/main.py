@@ -89,7 +89,8 @@ def main() -> None:
     # ── STT / LLM / TTS ───────────────────────────────────────────────────
     stt = WhisperEngine(model_name=cfg.stt_model_name)
     llm = LlamaCppClient(base_url=cfg.llm_base_url)
-    tts = PiperEngine(model_path=cfg.piper_voice, output_device=cfg.tts_output_device)
+    tts = PiperEngine(model_path=cfg.piper_voice, output_device=cfg.tts_output_device,
+                      aplay_device=cfg.tts_aplay_device)
 
     # ── Start ─────────────────────────────────────────────────────────────
     hardware.start()
