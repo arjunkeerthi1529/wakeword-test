@@ -80,7 +80,7 @@
   const pill = $("pill"), toggle = $("toggle"), banner = $("banner"), idleNote = $("idle-note");
   const alertsEl = $("alerts"), transcriptEl = $("transcript");
 
-  let ws = null, connected = false, active = false, lastEventId = 0, pingTimer = null, wakeLock = null;
+  let ws = null, connected = false, active = false, lastEventId = 0, pingTimer = null, wakeLock = null, failures = 0;
   const cards = new Map();
 
   function setBanner(text, isErr) {
@@ -177,10 +177,11 @@
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     ws = new WebSocket(proto + "://" + location.host + "/events");
-    ws.onopen = () => { connected = true; renderState(); pingTimer = setInterval(() => { try { ws.send("ping"); } catch (e) {} }, 15000); };
+    ws.onopen = () => { connected = true; failures = 0; setBanner(""); renderState(); pingTimer = setInterval(() => { try { ws.send("ping"); } catch (e) {} }, 15000); };
     ws.onmessage = (m) => { try { handle(JSON.parse(m.data)); } catch (e) {} };
     ws.onclose = () => {
       connected = false; clearInterval(pingTimer); renderState();
+      if (++failures >= 3) setBanner("The page loaded but the live connection to the Pi keeps failing. On the Pi run: pip install websockets, then restart the app. Also check the Pi log.", true);
       setTimeout(connect, 2000);
     };
     ws.onerror = () => { try { ws.close(); } catch (e) {} };

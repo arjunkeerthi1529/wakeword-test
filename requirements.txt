@@ -7,3 +7,4 @@ openwakeword
 faster-whisper
 fastapi
 uvicorn
+websockets

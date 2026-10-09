@@ -124,7 +124,15 @@ class ScamServer:
         return app
 
     def start_in_thread(self) -> None:
+        import importlib.util
+
         import uvicorn
+
+        if not (importlib.util.find_spec("websockets") or importlib.util.find_spec("wsproto")):
+            logger.error(
+                "No WebSocket library installed — the phone page will load but show 'Connection lost'. "
+                "Run: pip install websockets   (then restart)"
+            )
 
         config = uvicorn.Config(
             self.app, host=self.cfg.host, port=self.cfg.port, log_level="warning",
