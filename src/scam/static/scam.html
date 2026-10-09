@@ -10,7 +10,7 @@
     --accent: #1f6feb; --on-accent: #ffffff;
     --warn-bg: #fdeceb; --warn-line: #d93025; --warn-text: #8c1a12;
     --watch-bg: #fff4dc; --watch-line: #d98e04; --watch-text: #6b4600;
-    --ok: #1e8e3e; --bad: #d93025;
+    --ok: #1e8e3e; --bad: #d93025; --ok-bg: #e6f4ea;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -18,7 +18,7 @@
       --accent: #4c8dff; --on-accent: #07101f;
       --warn-bg: #3a1714; --warn-line: #ff6b61; --warn-text: #ffd6d2;
       --watch-bg: #3a2c0c; --watch-line: #f0b429; --watch-text: #ffe7a8;
-      --ok: #5bd17e; --bad: #ff6b61;
+      --ok: #5bd17e; --bad: #ff6b61; --ok-bg: #16281c;
     }
   }
   * { box-sizing: border-box; }
@@ -53,9 +53,15 @@
   h3 { font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 20px 0 8px; }
   #transcript { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
     padding: 6px 12px; max-height: 45vh; overflow-y: auto; }
-  #transcript .line { padding: 6px 0; border-bottom: 1px solid var(--line); font-size: .95rem; }
+  #transcript .line { padding: 6px 8px; border-bottom: 1px solid var(--line); font-size: .95rem;
+    border-left: 3px solid transparent; transition: background .2s; }
   #transcript .line:last-child { border-bottom: 0; }
+  #transcript .line.safe { border-left-color: var(--ok); background: var(--ok-bg); }
+  #transcript .line.flag-warn { border-left-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-text); }
+  #transcript .line.flag-watch { border-left-color: var(--watch-line); background: var(--watch-bg); color: var(--watch-text); }
   #transcript .t { color: var(--muted); font-size: .78rem; margin-right: 6px; font-variant-numeric: tabular-nums; }
+  #transcript .mark { float: right; font-size: .8rem; font-weight: 700; margin-left: 8px; }
+  #transcript .line.safe .mark { color: var(--ok); }
   #transcript .empty { color: var(--muted); padding: 10px 0; }
 </style>
 </head>
@@ -94,6 +100,25 @@
 
   let ws = null, connected = false, active = false, lastEventId = 0, pingTimer = null, wakeLock = null, failures = 0;
   const cards = new Map();
+  const lines = new Map();       // segment_id -> transcript row element
+  const alertRisk = new Map();   // segment_id -> "warn" | "watch"
+  let reviewedThrough = 0;       // highest segment number the Pi has analyzed
+
+  const segNum = (id) => parseInt(String(id).slice(1), 10) || 0;
+
+  function paintLine(segId) {
+    const row = lines.get(segId); if (!row) return;
+    row.classList.remove("safe", "flag-warn", "flag-watch");
+    const mark = row.querySelector(".mark"); if (mark) mark.textContent = "";
+    if (alertRisk.has(segId)) {
+      row.classList.add(alertRisk.get(segId) === "warn" ? "flag-warn" : "flag-watch");
+    } else if (segNum(segId) <= reviewedThrough) {
+      row.classList.add("safe");
+      if (mark) mark.textContent = "✓";
+    }
+  }
+
+  function repaintLines() { lines.forEach((_, id) => paintLine(id)); }
 
   function setBanner(text, isErr) {
     banner.hidden = !text;
@@ -117,7 +142,8 @@
   }
 
   function clearCall() {
-    cards.clear(); alertsEl.textContent = ""; showCheck(null);
+    cards.clear(); lines.clear(); alertRisk.clear(); reviewedThrough = 0;
+    alertsEl.textContent = ""; showCheck(null);
     transcriptEl.textContent = "";
     const e = document.createElement("div"); e.className = "empty"; e.textContent = "Nothing yet.";
     transcriptEl.appendChild(e);
@@ -128,12 +154,16 @@
     if (empty) empty.remove();
     const row = document.createElement("div"); row.className = "line";
     const t = document.createElement("span"); t.className = "t"; t.textContent = fmt(seg.start_ms);
-    row.appendChild(t); row.appendChild(document.createTextNode(seg.text));
+    const mark = document.createElement("span"); mark.className = "mark";
+    row.appendChild(t); row.appendChild(mark); row.appendChild(document.createTextNode(seg.text));
     transcriptEl.appendChild(row);
+    lines.set(seg.segment_id, row);
+    paintLine(seg.segment_id);
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   }
 
   function upsertCard(a) {
+    alertRisk.set(a.segment_id, a.risk); paintLine(a.segment_id);
     let card = cards.get(a.segment_id);
     const isNew = !card;
     if (isNew) { card = document.createElement("div"); cards.set(a.segment_id, card); alertsEl.prepend(card); }
@@ -155,7 +185,8 @@
     if (ev.type === "snapshot") {
       lastEventId = 0; clearCall();
       active = !!ev.active;
-      ev.segments.forEach(addLine); ev.alerts.forEach(upsertCard); showCheck(ev.last_check);
+      if (ev.last_check) reviewedThrough = segNum(ev.last_check.segment_id);
+      ev.segments.forEach(addLine); ev.alerts.forEach(upsertCard); repaintLines(); showCheck(ev.last_check);
       setBanner(ev.audio_gap ? "Microphone is not delivering audio. Monitoring may be incomplete." : "", ev.audio_gap);
       renderState(); return;
     }
@@ -165,7 +196,9 @@
     switch (ev.type) {
       case "listening": clearCall(); active = true; setBanner(""); acquireWakeLock(); break;
       case "transcript": addLine(ev); break;
-      case "checked": showCheck(ev); break;
+      case "checked":
+        reviewedThrough = Math.max(reviewedThrough, segNum(ev.segment_id));
+        repaintLines(); showCheck(ev); break;
       case "processing": setBanner(ev.active ? "Analyzing on Raspberry Pi…" : (ev.message || ""), !ev.active && !!ev.message); break;
       case "warning":
         upsertCard(ev);
