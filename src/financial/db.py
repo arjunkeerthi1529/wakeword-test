@@ -162,6 +162,54 @@ def init_schema(conn: sqlite3.Connection) -> None:
             value TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS budgets (
+            id TEXT PRIMARY KEY,
+            category_id TEXT NOT NULL UNIQUE REFERENCES categories(id),
+            amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS goals (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            emoji TEXT NOT NULL DEFAULT '⭐',
+            target_paise INTEGER NOT NULL CHECK (target_paise > 0),
+            start_date TEXT NOT NULL,
+            due_date TEXT NOT NULL,
+            archived INTEGER NOT NULL DEFAULT 0,
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS goal_contributions (
+            id TEXT PRIMARY KEY,
+            goal_id TEXT NOT NULL REFERENCES goals(id),
+            amount_paise INTEGER NOT NULL CHECK (amount_paise > 0),
+            contributed_date TEXT NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS loans (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            emoji TEXT NOT NULL DEFAULT '🏷️',
+            lender TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('no_cost_emi', 'loan_emi', 'card_emi')),
+            emi_paise INTEGER NOT NULL CHECK (emi_paise > 0),
+            start_date TEXT NOT NULL,
+            months INTEGER NOT NULL CHECK (months > 0),
+            due_day INTEGER NOT NULL CHECK (due_day >= 1 AND due_day <= 28),
+            source TEXT NOT NULL CHECK (source IN ('bank', 'card')),
+            archived INTEGER NOT NULL DEFAULT 0,
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_transactions_posted_date ON transactions(posted_date, id);
         CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category_id, posted_date);
         CREATE INDEX IF NOT EXISTS idx_transactions_account ON transactions(account_id, posted_date);
@@ -695,3 +743,212 @@ class FinanceRepository:
                 (normalized_description, model_identifier, prompt_version,
                  category_seed_version, category_id, 1 if ambiguous else 0),
             )
+
+    # -- budgets -------------------------------------------------------------------
+
+    def upsert_budget(self, category_id: str, amount_paise: int) -> dict[str, Any]:
+        existing = self._conn.execute(
+            "SELECT * FROM budgets WHERE category_id = ?", (category_id,)
+        ).fetchone()
+        with self._conn as conn:
+            if existing is None:
+                budget_id = new_id("budget")
+                conn.execute(
+                    "INSERT INTO budgets (id, category_id, amount_paise) VALUES (?, ?, ?)",
+                    (budget_id, category_id, amount_paise),
+                )
+            else:
+                budget_id = existing["id"]
+                conn.execute(
+                    "UPDATE budgets SET amount_paise = ?, revision = revision + 1, "
+                    "updated_at = datetime('now') WHERE id = ?",
+                    (amount_paise, budget_id),
+                )
+            self._bump_data_revision(conn.cursor())
+        return dict(self._conn.execute("SELECT * FROM budgets WHERE id = ?", (budget_id,)).fetchone())
+
+    def get_budget_by_category(self, category_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM budgets WHERE category_id = ?", (category_id,)).fetchone()
+        return _row_to_dict(row)
+
+    def list_budgets(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute("SELECT * FROM budgets ORDER BY created_at").fetchall()
+        return [dict(row) for row in rows]
+
+    def delete_budget(self, category_id: str) -> bool:
+        with self._conn as conn:
+            cursor = conn.execute("DELETE FROM budgets WHERE category_id = ?", (category_id,))
+            if cursor.rowcount:
+                self._bump_data_revision(conn.cursor())
+            return cursor.rowcount > 0
+
+    # -- goals ---------------------------------------------------------------------
+
+    def create_goal(self, name: str, emoji: str, target_paise: int, start_date: str, due_date: str) -> dict[str, Any]:
+        goal_id = new_id("goal")
+        with self._conn as conn:
+            conn.execute(
+                "INSERT INTO goals (id, name, emoji, target_paise, start_date, due_date) VALUES (?, ?, ?, ?, ?, ?)",
+                (goal_id, name, emoji, target_paise, start_date, due_date),
+            )
+            self._bump_data_revision(conn.cursor())
+        return dict(self._conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone())
+
+    def get_goal(self, goal_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+        return _row_to_dict(row)
+
+    def require_goal(self, goal_id: str) -> dict[str, Any]:
+        goal = self.get_goal(goal_id)
+        if goal is None:
+            raise NotFoundError(f"Goal not found: {goal_id}")
+        return goal
+
+    def list_goals(self, include_archived: bool = False) -> list[dict[str, Any]]:
+        if include_archived:
+            rows = self._conn.execute("SELECT * FROM goals ORDER BY created_at").fetchall()
+        else:
+            rows = self._conn.execute("SELECT * FROM goals WHERE archived = 0 ORDER BY created_at").fetchall()
+        return [dict(row) for row in rows]
+
+    def update_goal(self, goal_id: str, expected_revision: int, changes: dict[str, Any]) -> dict[str, Any]:
+        current = self.require_goal(goal_id)
+        if current["revision"] != expected_revision:
+            raise RevisionConflictError(f"Goal {goal_id} revision changed")
+        allowed = {"name", "emoji", "target_paise", "due_date", "archived"}
+        set_clauses, params = [], []
+        for field, value in changes.items():
+            if field not in allowed:
+                continue
+            set_clauses.append(f"{field} = ?")
+            params.append(value)
+        if not set_clauses:
+            return current
+        set_clauses.append("revision = revision + 1")
+        set_clauses.append("updated_at = datetime('now')")
+        params.append(goal_id)
+        with self._conn as conn:
+            conn.execute(f"UPDATE goals SET {', '.join(set_clauses)} WHERE id = ?", params)
+            self._bump_data_revision(conn.cursor())
+        return self.require_goal(goal_id)
+
+    def delete_goal(self, goal_id: str) -> None:
+        self.require_goal(goal_id)
+        with self._conn as conn:
+            conn.execute("DELETE FROM goal_contributions WHERE goal_id = ?", (goal_id,))
+            conn.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+            self._bump_data_revision(conn.cursor())
+
+    def add_goal_contribution(self, goal_id: str, amount_paise: int, contributed_date: str, note: str | None = None) -> dict[str, Any]:
+        self.require_goal(goal_id)
+        contrib_id = new_id("contrib")
+        with self._conn as conn:
+            conn.execute(
+                "INSERT INTO goal_contributions (id, goal_id, amount_paise, contributed_date, note) VALUES (?, ?, ?, ?, ?)",
+                (contrib_id, goal_id, amount_paise, contributed_date, note),
+            )
+            self._bump_data_revision(conn.cursor())
+        return dict(self._conn.execute("SELECT * FROM goal_contributions WHERE id = ?", (contrib_id,)).fetchone())
+
+    def list_goal_contributions(self, goal_id: str) -> list[dict[str, Any]]:
+        self.require_goal(goal_id)
+        rows = self._conn.execute(
+            "SELECT * FROM goal_contributions WHERE goal_id = ? ORDER BY contributed_date DESC, created_at DESC",
+            (goal_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def goal_saved_paise(self, goal_id: str) -> int:
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(amount_paise), 0) AS total FROM goal_contributions WHERE goal_id = ?",
+            (goal_id,),
+        ).fetchone()
+        return int(row["total"])
+
+    # -- loans ---------------------------------------------------------------------
+
+    def create_loan(self, fields: dict[str, Any]) -> dict[str, Any]:
+        loan_id = new_id("loan")
+        with self._conn as conn:
+            conn.execute(
+                """INSERT INTO loans (id, name, emoji, lender, kind, emi_paise, start_date, months, due_day, source)
+                   VALUES (:id, :name, :emoji, :lender, :kind, :emi_paise, :start_date, :months, :due_day, :source)""",
+                {"id": loan_id, **fields},
+            )
+            self._bump_data_revision(conn.cursor())
+        return dict(self._conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone())
+
+    def get_loan(self, loan_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute("SELECT * FROM loans WHERE id = ?", (loan_id,)).fetchone()
+        return _row_to_dict(row)
+
+    def require_loan(self, loan_id: str) -> dict[str, Any]:
+        loan = self.get_loan(loan_id)
+        if loan is None:
+            raise NotFoundError(f"Loan not found: {loan_id}")
+        return loan
+
+    def list_loans(self, include_archived: bool = False) -> list[dict[str, Any]]:
+        if include_archived:
+            rows = self._conn.execute("SELECT * FROM loans ORDER BY created_at").fetchall()
+        else:
+            rows = self._conn.execute("SELECT * FROM loans WHERE archived = 0 ORDER BY created_at").fetchall()
+        return [dict(row) for row in rows]
+
+    def update_loan(self, loan_id: str, expected_revision: int, changes: dict[str, Any]) -> dict[str, Any]:
+        current = self.require_loan(loan_id)
+        if current["revision"] != expected_revision:
+            raise RevisionConflictError(f"Loan {loan_id} revision changed")
+        allowed = {"name", "emoji", "lender", "kind", "emi_paise", "months", "due_day", "archived"}
+        set_clauses, params = [], []
+        for field, value in changes.items():
+            if field not in allowed:
+                continue
+            set_clauses.append(f"{field} = ?")
+            params.append(value)
+        if not set_clauses:
+            return current
+        set_clauses.append("revision = revision + 1")
+        set_clauses.append("updated_at = datetime('now')")
+        params.append(loan_id)
+        with self._conn as conn:
+            conn.execute(f"UPDATE loans SET {', '.join(set_clauses)} WHERE id = ?", params)
+            self._bump_data_revision(conn.cursor())
+        return self.require_loan(loan_id)
+
+    def delete_loan(self, loan_id: str) -> None:
+        self.require_loan(loan_id)
+        with self._conn as conn:
+            conn.execute("DELETE FROM loans WHERE id = ?", (loan_id,))
+            self._bump_data_revision(conn.cursor())
+
+    # -- recurring detection helpers -----------------------------------------------
+
+    def transactions_for_recurring_detection(self, start_date: str, end_date_exclusive: str) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            """SELECT id, merchant, merchant_key, category_id, posted_date, amount_paise, source
+               FROM transactions
+               WHERE deleted_at IS NULL AND type = 'expense'
+                 AND merchant_key IS NOT NULL AND merchant_key != ''
+                 AND posted_date >= ? AND posted_date < ?
+               ORDER BY merchant_key, posted_date""",
+            (start_date, end_date_exclusive),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    # -- daily spending for forecast -----------------------------------------------
+
+    def daily_spending(self, start_date: str, end_date_exclusive: str, category_ids: list[str] | None = None) -> list[dict[str, Any]]:
+        clauses = ["deleted_at IS NULL", "type = 'expense'", "posted_date >= ?", "posted_date < ?"]
+        params: list[Any] = [start_date, end_date_exclusive]
+        if category_ids:
+            clauses.append(f"category_id IN ({','.join('?' for _ in category_ids)})")
+            params.extend(category_ids)
+        where_sql = " AND ".join(clauses)
+        rows = self._conn.execute(
+            f"""SELECT posted_date, SUM(amount_paise) AS total_paise, COUNT(*) AS count
+                FROM transactions WHERE {where_sql}
+                GROUP BY posted_date ORDER BY posted_date""",
+            params,
+        ).fetchall()
+        return [dict(row) for row in rows]

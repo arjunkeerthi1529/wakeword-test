@@ -211,7 +211,10 @@ def build_categorize_batch_messages(rows: list[dict[str, Any]]) -> list[Message]
 QUESTION_OPERATIONS = [
     "total_spending", "category_breakdown", "merchant_breakdown",
     "biggest_expenses", "busiest_day", "transaction_count",
-    "average_spending", "compare_periods", "unsupported",
+    "average_spending", "compare_periods",
+    "budget_remaining", "emi_info", "recurring_info",
+    "hypothetical_spend", "list_transactions",
+    "unsupported",
 ]
 
 INTERPRET_QUESTION_SCHEMA = {
@@ -231,13 +234,15 @@ INTERPRET_QUESTION_SCHEMA = {
         "period_days": {"type": "integer"},
         "limit": {"type": "integer"},
         "average_unit": {"type": "string", "enum": ["daily", "monthly", "unknown"]},
+        "hypothetical_amount_text": {"type": "string"},
         "needs_clarification": {"type": "boolean"},
         "clarification": {"type": "string"},
     },
     "required": [
         "operation", "category_ids", "merchant_text", "period_kind",
         "period_start_date", "period_end_date_exclusive", "period_days",
-        "limit", "average_unit", "needs_clarification", "clarification",
+        "limit", "average_unit", "hypothetical_amount_text",
+        "needs_clarification", "clarification",
     ],
 }
 
@@ -252,6 +257,7 @@ class InterpretQuestionResult(BaseModel):
     period_days: int = 0
     limit: int = 0
     average_unit: str = "unknown"
+    hypothetical_amount_text: str = ""
     needs_clarification: bool = False
     clarification: str = ""
 
@@ -274,14 +280,26 @@ def _interpret_question_system_prompt(today: date) -> str:
         "- average_spending: 'average daily/monthly spend'. Set 'average_unit' "
         "to daily or monthly.\n"
         "- compare_periods: 'compare X with last month', 'more or less than'.\n"
-        "- unsupported: anything else, including questions about EMIs, loans, "
-        "recurring payments, subscriptions, budgets, remaining balance, income "
-        "or 'what if I spend' -- these are not available in this build.\n"
+        "- budget_remaining: 'how much left', 'remaining budget', 'can I still "
+        "spend'. Needs at least one category_id.\n"
+        "- emi_info: 'how much do I pay in EMIs', 'loan installments', 'EMI "
+        "details'. For questions about EMIs, loans, installments.\n"
+        "- recurring_info: 'recurring payments', 'subscriptions', 'what do I "
+        "pay every month', 'fixed monthly costs'.\n"
+        "- hypothetical_spend: 'if I spend X on Y, will I go over budget'. Put "
+        "the hypothetical amount in 'hypothetical_amount_text' as a plain "
+        "number string.\n"
+        "- list_transactions: 'show me', 'list my', 'what did I buy'. Returns "
+        "matching transactions.\n"
+        "- unsupported: questions outside the spending domain (weather, general "
+        "knowledge, etc.).\n"
         "Prefer total_spending for any plain 'how much did I spend on X' "
         "question, even if the answer might be zero.\n"
         f"Choose category_ids only from: {CATEGORY_ID_TEXT}.\n"
         "Put a shop/app/payee name in 'merchant_text' (e.g. 'Swiggy'); leave it "
         "empty when none is named.\n"
+        "Set 'hypothetical_amount_text' only for hypothetical_spend; otherwise "
+        "leave it empty.\n"
         "Choose period_kind from: today, yesterday, this_month_to_date, "
         "last_month, last_n_days, explicit_range, unknown. Use "
         "period_start_date/period_end_date_exclusive (YYYY-MM-DD) only for an "
@@ -296,12 +314,14 @@ def _interpret_question_system_prompt(today: date) -> str:
 def _interpret_question_example(
     operation: str, category_ids: list[str], period_kind: str,
     merchant_text: str = "", limit: int = 0, average_unit: str = "unknown",
+    hypothetical_amount_text: str = "",
     needs_clarification: bool = False, clarification: str = "",
 ) -> dict[str, Any]:
     return {
         "operation": operation, "category_ids": category_ids, "merchant_text": merchant_text,
         "period_kind": period_kind, "period_start_date": "", "period_end_date_exclusive": "",
         "period_days": 0, "limit": limit, "average_unit": average_unit,
+        "hypothetical_amount_text": hypothetical_amount_text,
         "needs_clarification": needs_clarification, "clarification": clarification,
     }
 
@@ -327,11 +347,19 @@ _INTERPRET_QUESTION_EXAMPLES: list[tuple[str, dict[str, Any]]] = [
      _interpret_question_example("average_spending", [], "this_month_to_date", average_unit="daily")),
     ("Compare food with last month",
      _interpret_question_example("compare_periods", ["food_dining"], "this_month_to_date")),
+    ("How much can I still spend on dining?",
+     _interpret_question_example("budget_remaining", ["food_dining"], "this_month_to_date")),
     ("How much do I pay in EMIs?",
-     _interpret_question_example(
-         "unsupported", [], "unknown", needs_clarification=True,
-         clarification="EMIs aren't tracked in this build yet. I can answer spending totals, "
-         "biggest expenses, breakdowns, counts, averages and month comparisons.")),
+     _interpret_question_example("emi_info", [], "unknown")),
+    ("What are my subscriptions?",
+     _interpret_question_example("recurring_info", [], "unknown")),
+    ("What do I pay every month?",
+     _interpret_question_example("recurring_info", [], "unknown")),
+    ("If I spend 2000 on headphones, will I go over my shopping budget?",
+     _interpret_question_example("hypothetical_spend", ["shopping"], "this_month_to_date",
+                                 hypothetical_amount_text="2000")),
+    ("Show me my food expenses this month",
+     _interpret_question_example("list_transactions", ["food_dining"], "this_month_to_date")),
     ("What's the weather today?",
      _interpret_question_example(
          "unsupported", [], "unknown", needs_clarification=True,

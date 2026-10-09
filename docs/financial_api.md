@@ -1,8 +1,9 @@
 # Financial Service API (v1)
 
-Expense tracker with quick-add, bank statement import, and a natural-language Ask engine. Runs as its own
-process, independent of the voice assistant, Scam Guard, and the Work service — all data stays in a local
-SQLite file on the Raspberry Pi.
+Expense tracker with quick-add, bank statement import, budgets, savings goals, EMI/loan tracking, recurring
+detection, forecasting, smart advice, and a natural-language Ask engine. Runs as its own process, independent
+of the voice assistant, Scam Guard, and the Work service — all data stays in a local SQLite file on the
+Raspberry Pi.
 
 - **Base URL:** `http://<pi-ip>:8002` (port is `FINANCIAL_PORT` in `.env`, default `8002`)
 - **Interactive docs:** `GET /docs` · OpenAPI spec: `GET /openapi.json`
@@ -152,6 +153,71 @@ or `cancelled`. The intermediate states happen inside the blocking `POST /import
 | `answer` | string | human-readable sentence the UI can display directly |
 | `clarification` | string | present when `status == "needs_clarification"` |
 | *(varies)* | | each operation returns additional structured data (see below) |
+
+### Budget
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | `budget-<uuid>` |
+| `category_id` | string | one of the 12 categories; **unique** — one budget per category |
+| `amount_paise` | int | monthly limit in paise, must be > 0 |
+| `revision` | int | for optimistic concurrency |
+| `created_at` | string | ISO-8601 |
+| `updated_at` | string | ISO-8601 |
+
+### Goal (Savings Goal)
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | `goal-<uuid>` |
+| `name` | string | user-chosen goal name |
+| `emoji` | string | display emoji, defaults to `"⭐"` |
+| `target_paise` | int | target amount in paise |
+| `start_date` | string | ISO `YYYY-MM-DD` |
+| `due_date` | string | ISO `YYYY-MM-DD` |
+| `archived` | int | `0` or `1` |
+| `revision` | int | for PATCH |
+| `created_at` | string | ISO-8601 |
+| `updated_at` | string | ISO-8601 |
+| `saved_paise` | int | (enriched) sum of all contributions |
+| `progress_percent` | string | (enriched) e.g. `"45.0"` |
+| `on_track` | bool | (enriched) whether current savings pace meets the target by `due_date` |
+| `need_per_month_paise` | int | (enriched) how much per remaining month to hit target |
+
+### Goal Contribution
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | `contrib-<uuid>` |
+| `goal_id` | string | |
+| `amount_paise` | int | positive integer |
+| `contributed_date` | string | ISO `YYYY-MM-DD` |
+| `note` | string \| null | optional note |
+| `created_at` | string | ISO-8601 |
+
+### Loan / EMI
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | `loan-<uuid>` |
+| `name` | string | e.g. `"iPhone 16 EMI"` |
+| `emoji` | string | defaults to `"🏷️"` |
+| `lender` | string | bank/NBFC name |
+| `kind` | `"no_cost_emi"` \| `"loan_emi"` \| `"card_emi"` | |
+| `emi_paise` | int | monthly installment amount |
+| `start_date` | string | ISO `YYYY-MM-DD` — first EMI date |
+| `months` | int | total installments |
+| `due_day` | int | 1–28, day of month when EMI is due |
+| `source` | `"bank"` \| `"card"` | which account type pays this |
+| `archived` | int | `0` or `1` |
+| `revision` | int | for PATCH |
+| `created_at` | string | ISO-8601 |
+| `updated_at` | string | ISO-8601 |
+| `current_installment` | int | (enriched) which installment we're on now |
+| `paid_installments` | int | (enriched) how many have been paid |
+| `done` | bool | (enriched) all installments completed |
+| `remaining_paise` | int | (enriched) total remaining to pay |
+| `end_date` | string | (enriched) ISO `YYYY-MM-DD` — last EMI month |
 
 ---
 
@@ -584,7 +650,7 @@ curl -X POST http://<pi-ip>:8002/questions \
 {
   "status": "needs_clarification",
   "operation": "unsupported",
-  "clarification": "EMIs aren't tracked in this build yet. I can answer spending totals, biggest expenses, breakdowns, counts, averages and month comparisons."
+  "clarification": "I can only answer spending questions about your recorded transactions."
 }
 ```
 
@@ -604,6 +670,11 @@ structured fields (`gross_expense_paise`, `breakdown`, `items`, etc.) are also a
 | `transaction_count` | "how many times", "how often" | `count`, plus spending totals |
 | `average_spending` | "average daily/monthly spend" | `average_paise`, `average_unit` (`"daily"` or `"monthly"`) |
 | `compare_periods` | "compare with last month", "more or less" | `current_period`, `previous_period` (each with spending totals), `delta_net_paise` |
+| `budget_remaining` | "how much left", "remaining budget" | `budget_paise`, `spent_paise`, `left_paise`, `per_day_paise`, `days_left` |
+| `emi_info` | "how much do I pay in EMIs", "loan details" | `loans[]`, `total_emi_paise`, `total_remaining_paise` |
+| `recurring_info` | "recurring payments", "what do I pay every month" | `recurring[]`, `recurring_total_paise`, `emi_total_paise`, `grand_total_paise` |
+| `hypothetical_spend` | "if I spend X on Y, will I go over budget" | `hypothetical_paise`, `budget_paise`, `current_spent_paise`, `after_paise`, `over_budget`, `over_by_paise` |
+| `list_transactions` | "show me my food expenses", "list my purchases" | `items[]` — `Transaction` objects, `total_count` |
 
 #### Period resolution
 
@@ -694,12 +765,305 @@ This month to date vs. the same elapsed days of last month.
     "matched_count": 31
   },
   "delta_net_paise": -85000,
-  "change_percent": "-9.2"
+  "change_percent": "-9.2",
+  "category_comparison": [
+    {
+      "category_id": "food_dining",
+      "current_paise": 320000,
+      "previous_paise": 280000,
+      "delta_paise": 40000,
+      "change_percent": "14.3"
+    },
+    {
+      "category_id": "transport",
+      "current_paise": 180000,
+      "previous_paise": 220000,
+      "delta_paise": -40000,
+      "change_percent": "-18.2"
+    }
+  ]
 }
 ```
 
 `change_percent` is `null` when the previous period's net spending was zero or negative (a percentage is
 meaningless in that case).
+
+`category_comparison` is included only when no `category_ids` filter is applied (i.e. overall comparison).
+Each entry shows per-category delta and percent change. Categories that existed only in the previous period
+appear with `current_paise: 0`.
+
+---
+
+### Budgets
+
+Per-category monthly spending limits. One budget per category.
+
+#### `PUT /budgets/{category_id}`
+
+Create or update a budget for a category.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `amount_paise` | int | yes | monthly limit in paise, must be > 0 |
+
+```bash
+curl -X PUT http://<pi-ip>:8002/budgets/food_dining \
+  -H 'Content-Type: application/json' \
+  -d '{"amount_paise": 1000000}'
+```
+
+`200` — returns the `Budget` object.
+
+`422` — invalid category_id or amount <= 0.
+
+#### `GET /budgets`
+
+Returns all budgets as `Budget[]`.
+
+#### `GET /budgets/status`
+
+Returns current month budget status for all budgets with live spend tracking.
+
+```json
+[
+  {
+    "category_id": "food_dining",
+    "budget_paise": 1000000,
+    "spent_paise": 650000,
+    "left_paise": 350000,
+    "usage_percent": "65.0",
+    "per_day_paise": 16667
+  }
+]
+```
+
+`usage_percent` can exceed `"100.0"` when over budget. `per_day_paise` is the remaining amount divided
+by remaining days in the month (0 if already past).
+
+#### `DELETE /budgets/{category_id}`
+
+`204` — deleted. `404` — no budget for that category.
+
+---
+
+### Savings Goals
+
+Track progress toward a savings target with contributions.
+
+#### `POST /goals`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | e.g. `"Emergency Fund"` |
+| `emoji` | string | no | defaults to `"⭐"` |
+| `target_paise` | int | yes | must be > 0 |
+| `start_date` | string | yes | ISO `YYYY-MM-DD` |
+| `due_date` | string | yes | ISO `YYYY-MM-DD` |
+
+`201` — returns enriched `Goal`.
+
+#### `GET /goals`
+
+Returns `Goal[]` (enriched). Optional: `?include_archived=true`.
+
+#### `GET /goals/{goal_id}`
+
+Returns one enriched `Goal`. `404` if not found.
+
+#### `PATCH /goals/{goal_id}`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `expected_revision` | int | yes | |
+| `name` | string | no | |
+| `emoji` | string | no | |
+| `target_paise` | int | no | |
+| `due_date` | string | no | |
+| `archived` | bool | no | `true` to archive |
+
+`200` — returns updated enriched `Goal`. `409` — revision mismatch.
+
+#### `DELETE /goals/{goal_id}`
+
+`204` — permanently deletes the goal and all its contributions.
+
+#### `POST /goals/{goal_id}/contributions`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `amount_paise` | int | yes | must be > 0 |
+| `contributed_date` | string | yes | ISO `YYYY-MM-DD` |
+| `note` | string | no | |
+
+`201` — returns the `GoalContribution`.
+
+#### `GET /goals/{goal_id}/contributions`
+
+Returns `GoalContribution[]` for the goal, newest first.
+
+---
+
+### Loans / EMIs
+
+Track EMI obligations (no-cost EMI, loan EMI, credit card EMI).
+
+#### `POST /loans`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string | yes | e.g. `"iPhone 16 EMI"` |
+| `emoji` | string | no | defaults to `"🏷️"` |
+| `lender` | string | yes | bank/NBFC name |
+| `kind` | `"no_cost_emi"` \| `"loan_emi"` \| `"card_emi"` | yes | |
+| `emi_paise` | int | yes | monthly installment amount |
+| `start_date` | string | yes | ISO `YYYY-MM-DD` |
+| `months` | int | yes | total installments |
+| `due_day` | int | yes | 1–28, day of month |
+| `source` | `"bank"` \| `"card"` | yes | |
+
+`201` — returns enriched `Loan`.
+
+#### `GET /loans`
+
+Returns `Loan[]` (enriched). Optional: `?include_archived=true`.
+
+#### `GET /loans/{loan_id}`
+
+Returns one enriched `Loan`. `404` if not found.
+
+#### `PATCH /loans/{loan_id}`
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `expected_revision` | int | yes | |
+| `name` | string | no | |
+| `emoji` | string | no | |
+| `lender` | string | no | |
+| `kind` | `"no_cost_emi"` \| `"loan_emi"` \| `"card_emi"` | no | |
+| `emi_paise` | int | no | |
+| `months` | int | no | |
+| `due_day` | int | no | |
+| `archived` | bool | no | |
+
+`200` — returns updated enriched `Loan`. `409` — revision mismatch.
+
+#### `DELETE /loans/{loan_id}`
+
+`204` — permanently deletes the loan.
+
+---
+
+### Recurring Detection
+
+#### `GET /recurring`
+
+Detects recurring spending patterns by scanning the last 3 complete months. A merchant is classified as
+recurring if it appears once per month in at least 2 of the 3 months with ≤15% amount variance.
+
+```json
+[
+  {
+    "merchant": "Netflix",
+    "merchant_key": "netflix",
+    "category_id": "subscriptions",
+    "amount_paise": 64900,
+    "typical_day": 15,
+    "occurrences": 3
+  }
+]
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `merchant` | string | display name |
+| `merchant_key` | string | normalized key |
+| `category_id` | string | most common category |
+| `amount_paise` | int | median amount across occurrences |
+| `typical_day` | int | most common day of month |
+| `occurrences` | int | how many months this merchant appeared in |
+
+---
+
+### Forecast / Projections
+
+#### `GET /forecast`
+
+Projects current month spending to end of month based on daily run rate.
+
+| Param | Type | Required | Notes |
+|---|---|---|---|
+| `category_id` | string | no | filter to a single category |
+
+```json
+{
+  "month": "2026-10",
+  "elapsed_days": 10,
+  "total_days": 31,
+  "actual_paise": 850000,
+  "projected_paise": 2635000,
+  "daily_average_paise": 85000,
+  "budget_paise": 3000000,
+  "over_budget": false,
+  "over_by_paise": 0,
+  "daily_spending": [
+    {"date": "2026-10-01", "amount_paise": 95000},
+    {"date": "2026-10-02", "amount_paise": 72000}
+  ]
+}
+```
+
+`budget_paise` is `null` if no budget is set for the requested category (or no budgets at all for overall).
+`daily_spending` lists actual spend per day in the current month so far.
+
+---
+
+### Advice / Nudges
+
+#### `GET /advice`
+
+Returns smart, actionable nudges based on current financial state.
+
+```json
+[
+  {
+    "type": "budget_warning",
+    "severity": "warning",
+    "message": "Food & Dining is at 85% of budget with 21 days left.",
+    "category_id": "food_dining",
+    "detail": {"usage_percent": "85.0", "budget_paise": 1000000, "spent_paise": 850000}
+  },
+  {
+    "type": "forecast_over_budget",
+    "severity": "alert",
+    "message": "At this pace, transport will exceed budget by ₹2,500.",
+    "category_id": "transport",
+    "detail": {"projected_paise": 450000, "budget_paise": 200000}
+  },
+  {
+    "type": "spending_spike",
+    "severity": "info",
+    "message": "Shopping is up 45% vs last month (₹3,200 more).",
+    "category_id": "shopping",
+    "detail": {"change_percent": "45.0", "delta_paise": 320000}
+  },
+  {
+    "type": "goal_nudge",
+    "severity": "info",
+    "message": "Emergency Fund is 30% there — ₹7,000/month needed to hit your target.",
+    "goal_id": "goal-abc123",
+    "detail": {"progress_percent": "30.0", "need_per_month_paise": 700000}
+  }
+]
+```
+
+**Advice types:**
+
+| Type | Trigger | Severity |
+|---|---|---|
+| `budget_warning` | Any category at ≥75% of budget | `warning` |
+| `forecast_over_budget` | Projected spend exceeds budget | `alert` |
+| `spending_spike` | Category up ≥25% AND ≥₹500 vs last month | `info` |
+| `goal_nudge` | Active goal not on track | `info` |
 
 ---
 
@@ -781,12 +1145,64 @@ All error responses are `{"detail": "<message>"}` except duplicate-file 409 whic
    → spending totals + category breakdown for this month to date
 
 2. GET /comparisons
-   → this month vs last month comparison
+   → this month vs last month comparison (with per-category breakdown)
 
-3. GET /transactions?needs_review=true&limit=10
+3. GET /budgets/status
+   → live budget usage for all categories with budgets
+
+4. GET /advice
+   → smart nudges: over-budget warnings, spending spikes, goal progress
+
+5. GET /transactions?needs_review=true&limit=10
    → items needing the user's attention
 
-4. Poll GET /health for data_revision changes to know when to refresh
+6. Poll GET /health for data_revision changes to know when to refresh
+```
+
+### Budget management
+
+```text
+1. GET /categories → show as a picker
+2. PUT /budgets/{category_id}  {"amount_paise": 1000000}
+   → set ₹10,000 limit for that category
+
+3. GET /budgets/status → render progress bars (spent vs limit)
+
+4. DELETE /budgets/{category_id} → remove a budget
+```
+
+### Savings goals
+
+```text
+1. POST /goals  {"name": "Emergency Fund", "target_paise": 10000000, "start_date": "2026-10-01", "due_date": "2027-03-31"}
+   → 201 enriched Goal
+
+2. GET /goals → show all goals with progress bars (saved_paise / target_paise)
+
+3. POST /goals/{id}/contributions  {"amount_paise": 500000, "contributed_date": "2026-10-10"}
+   → 201 GoalContribution
+
+4. GET /goals/{id}/contributions → show contribution history
+```
+
+### EMI / Loan tracking
+
+```text
+1. POST /loans  {"name": "iPhone 16", "lender": "HDFC", "kind": "no_cost_emi", "emi_paise": 833300, "start_date": "2026-07-01", "months": 12, "due_day": 5, "source": "card"}
+   → 201 enriched Loan
+
+2. GET /loans → show active EMIs with paid/remaining progress
+
+3. PATCH /loans/{id}  {"expected_revision": 1, "archived": true}
+   → archive a completed loan
+```
+
+### Recurring & committed spend
+
+```text
+1. GET /recurring → auto-detected recurring merchants (subscriptions, utilities, etc.)
+2. GET /loans → active EMI obligations
+   → combine both to show total committed monthly spend
 ```
 
 ---

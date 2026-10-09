@@ -17,6 +17,11 @@ GET    /imports/{id}                  GET /imports/{id}/rows     PATCH /imports/
 POST   /imports/{id}/confirm          DELETE /imports/{id}
 POST   /questions                     free-text question -> answer (blocks on one LLM call)
 GET    /summary                       GET /comparisons
+PUT    /budgets/{cat}                 GET /budgets               GET /budgets/status     DELETE /budgets/{cat}
+POST   /goals                         GET /goals                 GET /goals/{id}         PATCH /goals/{id}        DELETE /goals/{id}
+POST   /goals/{id}/contributions      GET /goals/{id}/contributions
+POST   /loans                         GET /loans                 GET /loans/{id}         PATCH /loans/{id}        DELETE /loans/{id}
+GET    /recurring                     GET /forecast              GET /advice
 """
 from __future__ import annotations
 
@@ -42,7 +47,10 @@ from .errors import (
 )
 from .parsers import ParseError
 from .periods import resolve_month_to_date_comparison, today_in
-from .services import AccountService, AnalyticsService, TransactionService
+from .services import (
+    AccountService, AdviceService, AnalyticsService, BudgetService,
+    ForecastService, GoalService, LoanService, RecurringService, TransactionService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,17 +62,30 @@ _accounts: AccountService | None = None
 _transactions: TransactionService | None = None
 _analytics: AnalyticsService | None = None
 _imports: imports_service.ImportService | None = None
+_budgets: BudgetService | None = None
+_goals: GoalService | None = None
+_loans: LoanService | None = None
+_recurring: RecurringService | None = None
+_forecast: ForecastService | None = None
+_advice: AdviceService | None = None
 _cfg = None
 
 
 def set_state(*, repo: FinanceRepository, cfg) -> None:
     global _repo, _accounts, _transactions, _analytics, _imports, _cfg
+    global _budgets, _goals, _loans, _recurring, _forecast, _advice
     _repo = repo
     _cfg = cfg
     _accounts = AccountService(repo)
     _transactions = TransactionService(repo)
     _analytics = AnalyticsService(repo)
     _imports = imports_service.ImportService(repo, llm_base_url=cfg.llm_base_url, llm_model=cfg.llm_model)
+    _budgets = BudgetService(repo)
+    _goals = GoalService(repo)
+    _loans = LoanService(repo)
+    _recurring = RecurringService(repo)
+    _forecast = ForecastService(repo)
+    _advice = AdviceService(repo, _budgets, _goals, _forecast)
 
 
 def create_app_state() -> None:
@@ -164,6 +185,57 @@ class ImportRowPatch(BaseModel):
 
 class QuestionRequest(BaseModel):
     text: str
+
+
+class BudgetUpsert(BaseModel):
+    amount_paise: int
+
+
+class GoalCreate(BaseModel):
+    name: str
+    emoji: str = "⭐"
+    target_paise: int
+    start_date: str
+    due_date: str
+
+
+class GoalPatch(BaseModel):
+    expected_revision: int
+    name: str | None = None
+    emoji: str | None = None
+    target_paise: int | None = None
+    due_date: str | None = None
+    archived: bool | None = None
+
+
+class ContributionCreate(BaseModel):
+    amount_paise: int
+    contributed_date: str
+    note: str | None = None
+
+
+class LoanCreate(BaseModel):
+    name: str
+    emoji: str = "🏷️"
+    lender: str
+    kind: Literal["no_cost_emi", "loan_emi", "card_emi"]
+    emi_paise: int
+    start_date: str
+    months: int
+    due_day: int
+    source: Literal["bank", "card"]
+
+
+class LoanPatch(BaseModel):
+    expected_revision: int
+    name: str | None = None
+    emoji: str | None = None
+    lender: str | None = None
+    kind: Literal["no_cost_emi", "loan_emi", "card_emi"] | None = None
+    emi_paise: int | None = None
+    months: int | None = None
+    due_day: int | None = None
+    archived: bool | None = None
 
 
 def _maybe_remember(merchant: str | None, category_id: str | None, remember: bool) -> None:
@@ -332,7 +404,8 @@ def ask_question(body: QuestionRequest):
     via a fixed, parameterized query -- the model never computes a total or
     picks its own date range."""
     return questions.answer_question(
-        _repo, body.text, llm_base_url=_cfg.llm_base_url, llm_model=_cfg.llm_model, timezone=_cfg.timezone
+        _repo, body.text, llm_base_url=_cfg.llm_base_url, llm_model=_cfg.llm_model, timezone=_cfg.timezone,
+        budget_svc=_budgets, loan_svc=_loans, recurring_svc=_recurring, forecast_svc=_forecast,
     )
 
 
@@ -355,3 +428,132 @@ def comparisons(category_ids: str | None = None, account_ids: str | None = None)
         category_ids=category_ids.split(",") if category_ids else None,
         account_ids=account_ids.split(",") if account_ids else None,
     )
+
+
+# -- budgets --------------------------------------------------------------------------
+
+@app.put("/budgets/{category_id}")
+def upsert_budget(category_id: str, body: BudgetUpsert):
+    return _budgets.upsert(category_id, body.amount_paise)
+
+
+@app.get("/budgets")
+def list_budgets():
+    return _budgets.list_budgets()
+
+
+@app.get("/budgets/status")
+def budget_status():
+    today = today_in(_cfg.timezone)
+    return _budgets.status(today)
+
+
+@app.delete("/budgets/{category_id}", status_code=204, response_model=None)
+def delete_budget(category_id: str):
+    if not _budgets.delete(category_id):
+        raise HTTPException(status_code=404, detail=f"No budget for category: {category_id}")
+    return Response(status_code=204)
+
+
+# -- goals ----------------------------------------------------------------------------
+
+@app.post("/goals", status_code=201)
+def create_goal(body: GoalCreate):
+    today = today_in(_cfg.timezone)
+    goal = _goals.create(body.name, body.emoji, body.target_paise, body.start_date, body.due_date)
+    return _goals.get(goal["id"], today=today)
+
+
+@app.get("/goals")
+def list_goals(include_archived: bool = False):
+    today = today_in(_cfg.timezone)
+    return _goals.list_goals(include_archived, today=today)
+
+
+@app.get("/goals/{goal_id}")
+def get_goal(goal_id: str):
+    today = today_in(_cfg.timezone)
+    return _goals.get(goal_id, today=today)
+
+
+@app.patch("/goals/{goal_id}")
+def update_goal(goal_id: str, body: GoalPatch):
+    changes = body.model_dump(exclude={"expected_revision"}, exclude_none=True)
+    if "archived" in changes:
+        changes["archived"] = 1 if changes["archived"] else 0
+    today = today_in(_cfg.timezone)
+    return _goals.update(goal_id, body.expected_revision, changes, today=today)
+
+
+@app.delete("/goals/{goal_id}", status_code=204, response_model=None)
+def delete_goal(goal_id: str):
+    _goals.delete(goal_id)
+    return Response(status_code=204)
+
+
+@app.post("/goals/{goal_id}/contributions", status_code=201)
+def add_contribution(goal_id: str, body: ContributionCreate):
+    return _goals.add_contribution(goal_id, body.amount_paise, body.contributed_date, body.note)
+
+
+@app.get("/goals/{goal_id}/contributions")
+def list_contributions(goal_id: str):
+    return _goals.list_contributions(goal_id)
+
+
+# -- loans / EMIs --------------------------------------------------------------------
+
+@app.post("/loans", status_code=201)
+def create_loan(body: LoanCreate):
+    return _loans.create(body.model_dump())
+
+
+@app.get("/loans")
+def list_loans(include_archived: bool = False):
+    today = today_in(_cfg.timezone)
+    return _loans.list_loans(include_archived, today=today)
+
+
+@app.get("/loans/{loan_id}")
+def get_loan(loan_id: str):
+    today = today_in(_cfg.timezone)
+    return _loans.get(loan_id, today=today)
+
+
+@app.patch("/loans/{loan_id}")
+def update_loan(loan_id: str, body: LoanPatch):
+    changes = body.model_dump(exclude={"expected_revision"}, exclude_none=True)
+    if "archived" in changes:
+        changes["archived"] = 1 if changes["archived"] else 0
+    today = today_in(_cfg.timezone)
+    return _loans.update(loan_id, body.expected_revision, changes, today=today)
+
+
+@app.delete("/loans/{loan_id}", status_code=204, response_model=None)
+def delete_loan(loan_id: str):
+    _loans.delete(loan_id)
+    return Response(status_code=204)
+
+
+# -- recurring detection --------------------------------------------------------------
+
+@app.get("/recurring")
+def detect_recurring():
+    today = today_in(_cfg.timezone)
+    return _recurring.detect(today)
+
+
+# -- forecast -------------------------------------------------------------------------
+
+@app.get("/forecast")
+def forecast(category_id: str | None = None):
+    today = today_in(_cfg.timezone)
+    return _forecast.project(today, category_id)
+
+
+# -- advice ---------------------------------------------------------------------------
+
+@app.get("/advice")
+def advice():
+    today = today_in(_cfg.timezone)
+    return _advice.generate(today)
