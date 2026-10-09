@@ -312,6 +312,36 @@
   }
   .reminder-msg { flex: 1; font-size: 13px; min-width: 0; }
 
+  /* ── Draft list ── */
+  .draft-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .draft-item { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+  .draft-item-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
+  .draft-subject { font-weight: 600; font-size: 13px; flex: 1; min-width: 0; }
+  .draft-tag { font-size: 10px; font-weight: 700; letter-spacing: .06em; padding: 2px 7px; border-radius: 12px; text-transform: uppercase; white-space: nowrap; }
+  .draft-tag.reply { background: var(--err-dim); color: var(--err); }
+  .draft-tag.notify { background: var(--accent-dim); color: var(--accent); }
+  .draft-status { font-size: 10px; font-weight: 700; letter-spacing: .04em; padding: 2px 7px; border-radius: 12px; text-transform: uppercase; white-space: nowrap; background: var(--code-bg); color: var(--fg-muted); }
+  .draft-status.sent { background: var(--accent-dim); color: var(--accent); }
+  .draft-status.rejected { background: var(--err-dim); color: var(--err); }
+  .draft-to { font-size: 11px; color: var(--fg-muted); margin-bottom: 6px; }
+  .draft-body { font-size: 13px; line-height: 1.5; color: var(--fg); white-space: pre-wrap; }
+  .draft-reason { font-size: 11px; color: var(--fg-muted); margin-top: 6px; font-style: italic; }
+  .draft-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .btn-approve { background: var(--accent); color: #fff; padding: 6px 12px; font-size: 12px; }
+  .btn-reject { background: var(--code-bg); color: var(--err); border: 1px solid var(--err-dim); padding: 6px 12px; font-size: 12px; }
+
+  /* ── Meeting list ── */
+  .meeting-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .meeting-item { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+  .meeting-item-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .meeting-when { font-size: 11px; color: var(--fg-muted); flex: 1; min-width: 0; }
+  .meeting-duration { font-family: var(--mono); font-size: 11px; color: var(--fg-muted); white-space: nowrap; }
+  .meeting-summary { font-size: 13px; line-height: 1.5; color: var(--fg); white-space: pre-wrap; }
+  .meeting-transcript-toggle { margin-top: 8px; color: var(--accent); background: none; border: none; font-size: 12px; font-weight: 600; padding: 0; }
+  .meeting-transcript { margin-top: 8px; padding: 10px; background: var(--code-bg); border-radius: 6px; font-size: 12px; line-height: 1.5; color: var(--fg-muted); white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+  #meeting-toggle.recording { background: var(--err); }
+  #meeting-live { color: var(--err); font-weight: 600; }
+
   /* ── Empty state ── */
   .empty {
     text-align: center;
@@ -448,6 +478,58 @@
   </div>
 </div>
 
+<!-- ── Outbound drafts ── -->
+<p class="section-label">Outbound Drafts</p>
+<div class="card">
+  <div class="card-header">
+    <span class="method get">GET</span>
+    <span class="route">/drafts</span>
+    <button class="btn-secondary" onclick="loadDrafts()">Refresh</button>
+  </div>
+  <div class="card-body">
+    <p style="margin:0 0 8px;color:var(--fg-muted);font-size:13px">
+      A <b>reply</b> goes back to the original sender and always waits for your approval here.
+      A <b>notify</b> only ever reaches the address in <code>AGENT_NOTIFY_EMAIL</code>, so it sends automatically.
+      Sending is mocked in this build — nothing is actually delivered.
+    </p>
+    <div id="drafts-list"></div>
+  </div>
+</div>
+
+<!-- ── Meeting notes ── -->
+<p class="section-label">Meeting Notes</p>
+<div class="card">
+  <div class="card-header">
+    <span class="method post">POST</span>
+    <span class="route">/meetings/start · /meetings/stop</span>
+  </div>
+  <div class="card-body">
+    <p style="margin:0 0 12px;color:var(--fg-muted);font-size:13px">
+      Click Start, talk (a meeting, a conversation — pauses are fine), click Stop.
+      Transcription runs locally (faster-whisper); the summary comes from the local LLM.
+    </p>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <button class="btn-primary" id="meeting-toggle" onclick="toggleMeeting()">Start recording</button>
+      <span id="meeting-live" class="empty" style="padding:0;display:none">Recording… <span id="meeting-timer">0s</span></span>
+    </div>
+    <div id="meeting-output" class="response" hidden>
+      <div class="response-meta"><span id="meeting-status"></span></div>
+      <pre class="output" id="meeting-body"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="method get">GET</span>
+    <span class="route">/meetings</span>
+    <button class="btn-secondary" onclick="loadMeetings()">Refresh</button>
+  </div>
+  <div class="card-body">
+    <div id="meetings-list"></div>
+  </div>
+</div>
+
 <script>
   const base = () => document.getElementById('base-url').value.replace(/\/$/, '');
 
@@ -487,7 +569,7 @@
       el.hidden = false;
       document.getElementById('health-status').textContent = 'Connection failed';
       document.getElementById('health-status').className = 'status-err';
-      document.getElementById('health-body').textContent = e.message + '\n\nMake sure the agent service is running:\n  python -m src.agent';
+      document.getElementById('health-body').textContent = e.message + '\n\nMake sure the work service is running:\n  python -m src.work';
     }
   }
 
@@ -552,7 +634,7 @@
     try {
       const r = await api('POST', '/emails/fetch');
       showResponse('fetch-output', 'fetch-status', 'fetch-body', r);
-      if (r.ok) loadEmails();
+      if (r.ok) { loadEmails(); loadDrafts(); }
     } catch (e) {
       document.getElementById('fetch-status').textContent = 'Connection failed';
       document.getElementById('fetch-status').className = 'status-err';
@@ -592,10 +674,168 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
+  async function loadDrafts() {
+    try {
+      const r = await api('GET', '/drafts');
+      const el = document.getElementById('drafts-list');
+      if (!r.ok || !r.data.length) {
+        el.innerHTML = '<div class="empty">No drafts yet — hit "Fetch &amp; Summarise" above</div>';
+        return;
+      }
+      el.innerHTML = '<div class="draft-list">' +
+        r.data.map(row => {
+          const pending = row.status === 'pending';
+          return `
+            <div class="draft-item" data-draft-id="${row.id}">
+              <div class="draft-item-header">
+                <span class="draft-tag ${row.action}">${row.action}</span>
+                <div class="draft-subject">${esc(row.subject || '(no subject)')}</div>
+                <span class="draft-status ${row.status}">${row.status}</span>
+              </div>
+              <div class="draft-to">To: ${esc(row.to_addr)}</div>
+              <div class="draft-body">${esc(row.body || '')}</div>
+              ${row.reason ? `<div class="draft-reason">Why: ${esc(row.reason)}</div>` : ''}
+              ${pending ? `
+                <div class="draft-actions">
+                  <button class="btn-approve" onclick="approveDraft(${row.id})">Approve &amp; send</button>
+                  <button class="btn-reject" onclick="rejectDraft(${row.id})">Reject</button>
+                </div>` : ''}
+            </div>`;
+        }).join('') +
+        '</div>';
+    } catch (_) {
+      document.getElementById('drafts-list').innerHTML =
+        '<div class="empty">Could not reach agent service</div>';
+    }
+  }
+
+  async function approveDraft(id) {
+    await api('POST', `/drafts/${id}/approve`);
+    loadDrafts();
+  }
+
+  async function rejectDraft(id) {
+    await api('POST', `/drafts/${id}/reject`);
+    loadDrafts();
+  }
+
+  // ── Meeting recording ──────────────────────────────────────────────────────
+  let meetingRecording = false;
+  let meetingTimerHandle = null;
+  let meetingStartedAt = 0;
+
+  async function toggleMeeting() {
+    if (meetingRecording) {
+      await stopMeeting();
+    } else {
+      await startMeeting();
+    }
+  }
+
+  async function startMeeting() {
+    const btn = document.getElementById('meeting-toggle');
+    const out = document.getElementById('meeting-output');
+    out.hidden = true;
+    btn.disabled = true;
+    try {
+      const r = await api('POST', '/meetings/start');
+      if (!r.ok) {
+        showResponse('meeting-output', 'meeting-status', 'meeting-body', r);
+        return;
+      }
+      meetingRecording = true;
+      meetingStartedAt = Date.now();
+      btn.textContent = 'Stop recording';
+      btn.classList.add('recording');
+      document.getElementById('meeting-live').style.display = '';
+      meetingTimerHandle = setInterval(() => {
+        const secs = Math.floor((Date.now() - meetingStartedAt) / 1000);
+        document.getElementById('meeting-timer').textContent = `${secs}s`;
+      }, 1000);
+    } catch (e) {
+      document.getElementById('meeting-output').hidden = false;
+      document.getElementById('meeting-status').textContent = 'Connection failed';
+      document.getElementById('meeting-status').className = 'status-err';
+      document.getElementById('meeting-body').textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function stopMeeting() {
+    const btn = document.getElementById('meeting-toggle');
+    btn.disabled = true;
+    clearInterval(meetingTimerHandle);
+    document.getElementById('meeting-live').style.display = 'none';
+    document.getElementById('meeting-status').textContent = 'Transcribing + summarising… (may take a minute)';
+    document.getElementById('meeting-status').className = '';
+    document.getElementById('meeting-body').textContent = '';
+    document.getElementById('meeting-output').hidden = false;
+    try {
+      const r = await api('POST', '/meetings/stop');
+      meetingRecording = false;
+      btn.textContent = 'Start recording';
+      btn.classList.remove('recording');
+      if (r.ok) {
+        document.getElementById('meeting-status').textContent = `Saved #${r.data.id} · ${Math.round(r.data.duration_s)}s`;
+        document.getElementById('meeting-status').className = 'status-ok';
+        document.getElementById('meeting-body').textContent = r.data.summary;
+        loadMeetings();
+      } else {
+        showResponse('meeting-output', 'meeting-status', 'meeting-body', r);
+      }
+    } catch (e) {
+      document.getElementById('meeting-status').textContent = 'Connection failed';
+      document.getElementById('meeting-status').className = 'status-err';
+      document.getElementById('meeting-body').textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function loadMeetings() {
+    try {
+      const r = await api('GET', '/meetings');
+      const el = document.getElementById('meetings-list');
+      if (!r.ok || !r.data.length) {
+        el.innerHTML = '<div class="empty">No meeting notes yet — click Start above</div>';
+        return;
+      }
+      el.innerHTML = '<div class="meeting-list">' +
+        r.data.map(row => `
+          <div class="meeting-item">
+            <div class="meeting-item-header">
+              <span class="meeting-when">${row.started_at ? new Date(row.started_at).toLocaleString() : ''}</span>
+              <span class="meeting-duration">${Math.round(row.duration_s)}s</span>
+            </div>
+            <div class="meeting-summary">${esc(row.summary || '')}</div>
+            <button class="meeting-transcript-toggle" onclick="toggleTranscript(${row.id}, this)">Show transcript</button>
+            <div class="meeting-transcript" id="transcript-${row.id}" hidden></div>
+          </div>`).join('') +
+        '</div>';
+    } catch (_) {
+      document.getElementById('meetings-list').innerHTML =
+        '<div class="empty">Could not reach agent service</div>';
+    }
+  }
+
+  async function toggleTranscript(id, btn) {
+    const el = document.getElementById(`transcript-${id}`);
+    if (!el.hidden) { el.hidden = true; btn.textContent = 'Show transcript'; return; }
+    if (!el.textContent) {
+      const r = await api('GET', `/meetings/${id}`);
+      el.textContent = r.ok ? (r.data.transcript || '(empty)') : 'Could not load transcript';
+    }
+    el.hidden = false;
+    btn.textContent = 'Hide transcript';
+  }
+
   // Auto-load on open
   checkHealth();
   loadReminders();
   loadEmails();
+  loadDrafts();
+  loadMeetings();
 </script>
 </body>
 </html>

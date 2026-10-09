@@ -5,8 +5,9 @@ Run as a standalone service, completely independent of the voice assistant:
     python -m src.work
 
 Starts:
-  - SQLite database (email summaries + reminders)
+  - SQLite database (email summaries, reminders, meeting notes, drafts)
   - PiperEngine (own TTS instance for speaking reminders)
+  - faster-whisper STT model (for meeting recording transcription)
   - ReminderAgent (re-arms any pending reminders from DB)
   - Daily scheduler (email digest at EMAIL_FETCH_TIME)
   - FastAPI HTTP server on AGENT_PORT (default 8001)
@@ -64,6 +65,19 @@ def main() -> None:
     except Exception as exc:
         logger.warning("TTS not available — reminders will log only (%s)", exc)
 
+    # ── STT — for meeting recording transcription ───────────────────────────
+    # Loaded eagerly (like TTS above) so the first "Stop" click isn't stuck
+    # waiting on a multi-second model load. Optional: skipped if
+    # faster-whisper isn't installed; /meetings/start then returns 503.
+    stt_available = False
+    try:
+        from .meeting_agent import preload_whisper
+        logger.info("Loading Whisper STT model for meeting transcription…")
+        preload_whisper(main_cfg.stt_model_name)
+        stt_available = True
+    except Exception as exc:
+        logger.warning("Meeting transcription not available — faster-whisper not installed (%s)", exc)
+
     # ── Reminder agent ────────────────────────────────────────────────────
     reminder_agent = ReminderAgent(tts=tts, conn=conn)
     reminder_agent.recover_from_db()
@@ -88,6 +102,7 @@ def main() -> None:
         reminder_agent=reminder_agent,
         agent_cfg=agent_cfg,
         main_cfg=main_cfg,
+        stt_available=stt_available,
     )
 
     port = int(os.getenv("AGENT_PORT", "8001"))
