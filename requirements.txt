@@ -4,3 +4,4 @@ numpy
 piper-tts
 requests
 openwakeword==0.6.0
+faster-whisper
