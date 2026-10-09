@@ -90,6 +90,8 @@ def report(cid, recs):
         sid = s["segment_id"]
         rule = rules.get(sid, {})
         rule_txt = rule.get("level", "-") + (f"/{rule['label']}" if rule.get("label") else "")
+        if rule.get("shadow") and rule.get("level", "none") != "none":
+            rule_txt += " (shadow)"
         a = first_alert.get(sid)
         alert_txt = ""
         if a:
