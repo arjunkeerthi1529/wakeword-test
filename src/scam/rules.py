@@ -140,6 +140,28 @@ def _scan(text: str) -> RuleResult:
     return RuleResult("none")
 
 
+# Looser than _SECRET_REQUEST ("my code", "your OTP"): only used to recognise refusals/advice.
+_ADVICE_MENTION = re.compile(
+    rf"\b{_ASK}\b{_W}(?:(?:my|your|the|a|an|any|this|that|our)\s+)?"
+    r"(?:o\.?\s?t\.?\s?p|one[\s-]time password|(?:verification |security )?code|"
+    r"(?:upi |atm |m-?)?pin|password|passcode|cvv|cvc|card (?:number|details))\b"
+)
+
+
+def looks_like_safety_advice(text: str) -> bool:
+    """True if the line mentions sharing a code/PIN/password but only in a refusal or
+    warning ("don't share your OTP with anyone"), never as a request. Used to veto LLM
+    warnings: a small model can't reliably tell advice from a request."""
+    t = text.lower()
+    found = False
+    for pattern in (_SECRET_REQUEST, _ADVICE_MENTION):
+        for m in pattern.finditer(t):
+            if not _negated(t, m):
+                return False
+            found = True
+    return found
+
+
 def evaluate(text: str, segment_id: str, prev_text: str = "") -> RuleResult:
     """Check the new segment; if nothing fires, check it joined with the previous
     one so a request split across a chunk boundary is still caught."""

@@ -392,9 +392,15 @@ class ScamMonitor:
                 max_tokens=self.cfg.llm_max_tokens, timeout=self.cfg.llm_timeout_s,
             )
             result = validate(raw, snap)
-            logger.info("LLM review took %.1fs → %s", time.monotonic() - t0,
-                        (f"{result.risk} {result.segment_id} {result.speaker}".strip()
-                         if result else "invalid reply"))
+            logger.info(
+                "LLM review took %.1fs (prompt %s tok in %.1fs, decode %s tok in %.1fs, %s) → %s",
+                time.monotonic() - t0,
+                timings.get("prompt_n"), timings.get("prompt_ms", 0) / 1000,
+                timings.get("predicted_n"), timings.get("predicted_ms", 0) / 1000,
+                timings.get("mode", "?"),
+                (f"{result.risk} {result.segment_id} {result.speaker}".strip()
+                 if result else "invalid reply"),
+            )
         except Exception as exc:
             transport_error = exc
         self.datalog.write(
@@ -423,11 +429,17 @@ class ScamMonitor:
                 session.reviewed_upto = max(session.reviewed_upto, snap.upto_index)
                 self._emit("processing", session=session, active=False, message="")
                 if result is not None and result.risk != "none":
-                    self._raise(
-                        session, level=result.risk, label="llm", evidence=result.evidence,
-                        segment_id=result.segment_id, message=_LLM_MESSAGES[result.risk],
-                        source="llm", speaker=result.speaker,
-                    )
+                    if rules.looks_like_safety_advice(result.evidence):
+                        logger.info("LLM %s on %s ignored: the line is a refusal or safety advice",
+                                    result.risk, result.segment_id)
+                        self.datalog.write("llm_veto", snap.call_id, segment_id=result.segment_id,
+                                           risk=result.risk, text=result.evidence)
+                    else:
+                        self._raise(
+                            session, level=result.risk, label="llm", evidence=result.evidence,
+                            segment_id=result.segment_id, message=_LLM_MESSAGES[result.risk],
+                            source="llm", speaker=result.speaker,
+                        )
         self._maybe_dispatch_llm(session)
 
     # ── Watchdog: max session length and audio gaps ───────────────────────
