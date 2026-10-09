@@ -39,6 +39,8 @@
     background: var(--surface); border: 1px solid var(--line); color: var(--muted); }
   .banner.err { color: var(--bad); border-color: var(--bad); }
   .banner[hidden] { display: none; }
+  .checked { margin: 10px 2px 0; font-size: .85rem; color: var(--muted); }
+  .checked[hidden] { display: none; }
   #idle-note { margin-top: 12px; color: var(--muted); font-size: .92rem; }
   #alerts { margin-top: 14px; display: grid; gap: 10px; }
   .card { border: 2px solid; border-radius: 14px; padding: 12px 14px; }
@@ -66,6 +68,7 @@
 
   <button id="toggle" disabled>Listen to this call</button>
   <div id="banner" class="banner" hidden></div>
+  <p id="checked" class="checked" hidden></p>
   <p id="idle-note">Put the phone on speakerphone next to the Pi, then tap Listen. Audio and analysis stay on the Pi.</p>
 
   <section id="alerts" aria-live="assertive"></section>
@@ -78,7 +81,16 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const pill = $("pill"), toggle = $("toggle"), banner = $("banner"), idleNote = $("idle-note");
-  const alertsEl = $("alerts"), transcriptEl = $("transcript");
+  const alertsEl = $("alerts"), transcriptEl = $("transcript"), checkedEl = $("checked");
+  const OUTCOME = { none: "no warning raised", warn: "warning raised", watch: "caution raised",
+                    advice: "safety advice, ignored", invalid: "reply unclear" };
+
+  function showCheck(c) {
+    if (!c) { checkedEl.hidden = true; return; }
+    checkedEl.hidden = false;
+    checkedEl.textContent = "Analyzed through " + c.segment_id + " in " + c.took_s + " s: " +
+      (OUTCOME[c.outcome] || c.outcome) + ". Not a guarantee that a call is safe.";
+  }
 
   let ws = null, connected = false, active = false, lastEventId = 0, pingTimer = null, wakeLock = null, failures = 0;
   const cards = new Map();
@@ -105,7 +117,7 @@
   }
 
   function clearCall() {
-    cards.clear(); alertsEl.textContent = "";
+    cards.clear(); alertsEl.textContent = ""; showCheck(null);
     transcriptEl.textContent = "";
     const e = document.createElement("div"); e.className = "empty"; e.textContent = "Nothing yet.";
     transcriptEl.appendChild(e);
@@ -142,7 +154,7 @@
     if (ev.type === "status" && ev.segments !== undefined) {
       lastEventId = 0; clearCall();
       active = !!ev.active;
-      ev.segments.forEach(addLine); ev.alerts.forEach(upsertCard);
+      ev.segments.forEach(addLine); ev.alerts.forEach(upsertCard); showCheck(ev.last_check);
       setBanner(ev.audio_gap ? "Microphone is not delivering audio. Monitoring may be incomplete." : "", ev.audio_gap);
       renderState(); return;
     }
@@ -152,6 +164,7 @@
     switch (ev.type) {
       case "listening": clearCall(); active = true; setBanner(""); acquireWakeLock(); break;
       case "transcript": addLine(ev); break;
+      case "checked": showCheck(ev); break;
       case "processing": setBanner(ev.active ? "Analyzing on Raspberry Pi…" : (ev.message || ""), !ev.active && !!ev.message); break;
       case "warning":
         upsertCard(ev);

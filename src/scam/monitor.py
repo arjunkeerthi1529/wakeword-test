@@ -71,6 +71,7 @@ class ScamMonitor:
         self._audio_gap = False
         self._last_block_t = 0.0
         self._stt_busy = False
+        self._last_check: Optional[dict] = None
         self._fragment = ""                # unfinished last sentence of a forced chunk cut
         self._fragment_start_ms = 0
         self._fragment_t = 0.0
@@ -100,6 +101,7 @@ class ScamMonitor:
             self._audio_gap = False
             self._last_block_t = time.monotonic()
             self._seg_cut = {}
+            self._last_check = None
             self._fragment = ""
             self.datalog.write(
                 "call_start", session.call_id,
@@ -153,6 +155,7 @@ class ScamMonitor:
                 "alerts": [self._alert_fields(a) for a in s.alerts.values()],
                 "audio_gap": self._audio_gap,
                 "llm_busy": s.llm_busy,
+                "last_check": self._last_check,
             }
 
     # ── Events ────────────────────────────────────────────────────────────
@@ -419,6 +422,8 @@ class ScamMonitor:
             snap = build_snapshot(session)
             if snap is None:
                 # Everything pending is trivial ("Hello?", "Okay."): nothing to review.
+                logger.info("Skipped review of %s: too short to carry a request",
+                            ", ".join(f"{g.id} {g.text!r}" for g in session.unreviewed()))
                 session.reviewed_upto = len(session.segments)
                 return
             session.llm_busy = True
@@ -440,9 +445,11 @@ class ScamMonitor:
                 max_tokens=self.cfg.llm_max_tokens, timeout=self.cfg.llm_timeout_s,
             )
             result = validate(raw, snap)
+            ids = snap.new_segments[0].id if len(snap.new_segments) == 1 else \
+                f"{snap.new_segments[0].id}-{snap.new_segments[-1].id}"
             logger.info(
-                "LLM review took %.1fs (prompt %s tok in %.1fs, decode %s tok in %.1fs, %s) → %s",
-                time.monotonic() - t0,
+                "LLM review of %s took %.1fs (prompt %s tok in %.1fs, decode %s tok in %.1fs, %s) → %s",
+                ids, time.monotonic() - t0,
                 timings.get("prompt_n"), timings.get("prompt_ms", 0) / 1000,
                 timings.get("predicted_n"), timings.get("predicted_ms", 0) / 1000,
                 timings.get("mode", "?"),
@@ -476,9 +483,11 @@ class ScamMonitor:
                 # can't wedge the queue. Rules already covered these segments.
                 session.reviewed_upto = max(session.reviewed_upto, snap.upto_index)
                 self._emit("processing", session=session, active=False, message="")
+                outcome = "invalid" if result is None else result.risk
                 if result is not None and result.risk != "none":
                     advice_line = rules.looks_like_safety_advice(result.evidence)
                     if advice_line and self.cfg.llm_advice_veto:
+                        outcome = "advice"
                         logger.info("LLM %s on %s ignored: the line is a refusal or safety advice",
                                     result.risk, result.segment_id)
                         self.datalog.write("llm_veto", snap.call_id, segment_id=result.segment_id,
@@ -489,6 +498,12 @@ class ScamMonitor:
                             segment_id=result.segment_id, message=_LLM_MESSAGES[result.risk],
                             source="llm", speaker=result.speaker,
                         )
+                self._last_check = {"segment_id": snap.new_segments[-1].id, "outcome": outcome,
+                                    "took_s": round(time.monotonic() - t0, 1)}
+                logger.info("CHECKED through %s: %s", self._last_check["segment_id"],
+                            {"none": "no warning raised", "warn": "WARNING raised", "watch": "CAUTION raised",
+                             "advice": "refusal/safety advice, ignored", "invalid": "reply unclear"}[outcome])
+                self._emit("checked", session=session, **self._last_check)
         self._maybe_dispatch_llm(session)
 
     # ── Watchdog: max session length and audio gaps ───────────────────────
