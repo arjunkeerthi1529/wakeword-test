@@ -40,6 +40,14 @@ class ScamLLM:
         self.mode = "grammar"                 # "grammar" (fast) or "schema" (fallback)
         self._http = requests.Session()       # keep-alive: no new connection per review
 
+    def ping(self, timeout: float = 1.5) -> Tuple[bool, str]:
+        """Is the model server answering? (llama-server exposes GET /health; any non-5xx counts.)"""
+        try:
+            resp = self._http.get(f"{self.base_url}/health", timeout=timeout)
+        except requests.RequestException as exc:
+            return False, str(exc)
+        return resp.status_code < 500, f"HTTP {resp.status_code}"
+
     def _payload(self, system: str, user: str, max_tokens: int) -> dict:
         payload = {
             "model": self.model,

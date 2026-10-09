@@ -146,12 +146,13 @@
     const m = document.createElement("p"); m.textContent = a.message; card.appendChild(m);
     const who = a.speaker === "caller" ? "Likely the caller" : a.speaker === "user" ? "Likely you" : "Speaker unclear";
     const meta = document.createElement("p"); meta.className = "meta";
-    meta.textContent = who + " · " + (a.source === "llm" ? "analyzed on the Pi" : "heard on the Pi");
+    const SOURCE = { rule: "heard on the Pi", llm: "analyzed on the Pi", "rule+llm": "heard and confirmed by analysis" };
+    meta.textContent = who + " · " + (SOURCE[a.source] || a.source);
     card.appendChild(meta);
   }
 
   function handle(ev) {
-    if (ev.type === "status" && ev.segments !== undefined) {
+    if (ev.type === "snapshot") {
       lastEventId = 0; clearCall();
       active = !!ev.active;
       ev.segments.forEach(addLine); ev.alerts.forEach(upsertCard); showCheck(ev.last_check);
@@ -177,7 +178,7 @@
         setBanner(why, ev.reason !== "user"); break;
       }
       case "error": setBanner(ev.message, true); break;
-      case "status": setBanner(ev.message || ""); break;
+      case "info": setBanner(ev.message || ""); break;
     }
     renderState();
   }

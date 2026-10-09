@@ -48,6 +48,18 @@ _LLM_MESSAGES = {
 }
 
 
+class MonitorError(RuntimeError):
+    code = "error"
+
+
+class AlreadyMonitoring(MonitorError):
+    code = "already_monitoring"
+
+
+class MicUnavailable(MonitorError):
+    code = "mic_unavailable"
+
+
 class ScamMonitor:
     def __init__(self, cfg, mic, stt, llm, led, on_event: Callable[[dict], None],
                  datalog: Optional[DataLog] = None):
@@ -85,9 +97,12 @@ class ScamMonitor:
     def start(self) -> str:
         with self._lock:
             if self._session is not None:
-                raise RuntimeError("Already monitoring a call")
+                raise AlreadyMonitoring("Already monitoring a call")
 
-            listener = self.mic.start()         # raises RuntimeError if the mic is busy/unavailable
+            try:
+                listener = self.mic.start()
+            except RuntimeError as exc:         # mic busy or missing
+                raise MicUnavailable(str(exc)) from exc
             self._listener = listener
 
             session = Session()
@@ -144,7 +159,8 @@ class ScamMonitor:
         with self._lock:
             s = self._session
             if s is None:
-                return {"active": False, "call_id": "", "segments": [], "alerts": []}
+                return {"active": False, "call_id": "", "segments": [], "alerts": [],
+                        "audio_gap": False, "llm_busy": False, "last_check": None}
             return {
                 "active": True,
                 "call_id": s.call_id,
@@ -186,8 +202,6 @@ class ScamMonitor:
             "speaker": a.speaker,
             "evidence": a.evidence,
             "message": a.message,
-            "reason": a.reason,
-            "advice": a.advice,
             "source": a.source,
             "revision": a.revision,
         }
@@ -369,32 +383,27 @@ class ScamMonitor:
     # ── Alerts ────────────────────────────────────────────────────────────
 
     def _raise(self, session: Session, level: str, label: str, evidence: str, segment_id: str,
-               message: str, source: str, speaker: str = "unknown",
-               reason: str = "", advice: str = "") -> None:
+               message: str, source: str, speaker: str = "unknown") -> None:
         with self._lock:
             if self._session is not session:
                 return
             existing = session.alerts.get(segment_id)
             vibrate = False
             if existing is None:
-                alert = Alert(segment_id, level, label, evidence, message, source,
-                              speaker, reason, advice, 1)
+                alert = Alert(segment_id, level, label, evidence, message, source, speaker, 1)
                 session.alerts[segment_id] = alert
                 vibrate = level == "warn"
             else:
-                before = (existing.level, existing.reason, existing.advice, existing.speaker)
+                before = (existing.level, existing.speaker, existing.source)
                 if rank(level) > rank(existing.level):
                     vibrate = level == "warn"
                     existing.level = level
-                if source == "llm":
-                    existing.reason = reason or existing.reason
-                    existing.advice = advice or existing.advice
-                    if speaker != "unknown":
-                        existing.speaker = speaker
-                if before == (existing.level, existing.reason, existing.advice, existing.speaker):
+                if source == "llm" and speaker != "unknown":
+                    existing.speaker = speaker
+                if source != existing.source and "+" not in existing.source:
+                    existing.source = "rule+llm"
+                if before == (existing.level, existing.speaker, existing.source):
                     return
-                if source == "llm":
-                    existing.source = "llm"
                 existing.revision += 1
                 alert = existing
 
@@ -521,4 +530,4 @@ class ScamMonitor:
                            message="Microphone is not delivering audio. Monitoring may be incomplete.")
             elif not gap and self._audio_gap:
                 self._audio_gap = False
-                self._emit("status", session=session, message="Audio resumed")
+                self._emit("info", session=session, message="Audio resumed")

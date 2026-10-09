@@ -57,8 +57,6 @@ class Alert:
     message: str
     source: str
     speaker: str = "unknown"
-    reason: str = ""
-    advice: str = ""
     revision: int = 1
 
 
