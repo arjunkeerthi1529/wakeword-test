@@ -14,11 +14,20 @@ POST /emails/fetch    trigger an immediate email fetch + summarise
 import logging
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Jarvis Agent Service", version="1.0.0")
+
+# Allow the local test HTML file (file://) and any localhost origin to call the API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Module-level state — set by __main__.py before uvicorn starts
 _conn = None

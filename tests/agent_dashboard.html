@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Service Dashboard</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600&display=swap">
+<style>
+  /* layout: sidebar-less single column, card sections per endpoint */
+  :root {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --border: #e2e4e9;
+    --fg: #111318;
+    --fg-muted: #6b7280;
+    --accent: #0ea87a;
+    --accent-dim: #d1fae5;
+    --warn: #f59e0b;
+    --err: #ef4444;
+    --err-dim: #fee2e2;
+    --code-bg: #f0f2f5;
+    --mono: 'JetBrains Mono', 'Fira Mono', monospace;
+    --sans: 'Inter', system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --fg: #e6edf3;
+      --fg-muted: #8b949e;
+      --accent: #3fb950;
+      --accent-dim: #0d2c1a;
+      --warn: #d29922;
+      --err: #f85149;
+      --err-dim: #2d0f0e;
+      --code-bg: #1c2128;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --fg: #e6edf3;
+    --fg-muted: #8b949e;
+    --accent: #3fb950;
+    --accent-dim: #0d2c1a;
+    --warn: #d29922;
+    --err: #f85149;
+    --err-dim: #2d0f0e;
+    --code-bg: #1c2128;
+    color-scheme: dark;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  body {
+    padding-inline: 20px;
+    padding-block: 24px;
+    max-width: 820px;
+    margin-inline: auto;
+  }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 17px;
+  }
+  .logo svg { flex-shrink: 0; }
+  header .spacer { flex: 1; }
+  #health-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    background: var(--code-bg);
+    color: var(--fg-muted);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+  #health-badge:hover { border-color: var(--accent); }
+  #health-badge .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--fg-muted);
+  }
+  #health-badge.ok .dot { background: var(--accent); }
+  #health-badge.ok { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-dim); }
+  #health-badge.err .dot { background: var(--err); }
+  #health-badge.err { color: var(--err); border-color: var(--err-dim); background: var(--err-dim); }
+
+  /* ── URL bar ── */
+  .url-bar {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+  }
+  .url-bar label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+  .url-bar input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 13px;
+    outline: none;
+    min-width: 0;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .method {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 4px;
+    letter-spacing: .04em;
+  }
+  .method.get { background: #dbeafe; color: #1d4ed8; }
+  .method.post { background: #dcfce7; color: #166534; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .method.get { background: #1e3a5f; color: #60a5fa; }
+    :root:not([data-theme="light"]) .method.post { background: #14532d; color: #4ade80; }
+  }
+  :root[data-theme="dark"] .method.get { background: #1e3a5f; color: #60a5fa; }
+  :root[data-theme="dark"] .method.post { background: #14532d; color: #4ade80; }
+  .route {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--fg);
+    flex: 1;
+    min-width: 0;
+  }
+  .card-body { padding: 16px; }
+
+  /* ── Form controls ── */
+  .field-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
+  .field label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .field input, .field select {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 13px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .field input:focus, .field select:focus { border-color: var(--accent); }
+
+  /* ── Buttons ── */
+  button {
+    cursor: pointer;
+    border: none;
+    border-radius: 6px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 8px 16px;
+    transition: opacity .15s;
+  }
+  button:hover { opacity: .85; }
+  button:active { opacity: .7; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-secondary {
+    background: var(--code-bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+  }
+
+  /* ── Response output ── */
+  .response {
+    margin-top: 12px;
+    border-radius: 6px;
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .response-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+  }
+  .status-ok { color: var(--accent); }
+  .status-err { color: var(--err); }
+  pre.output {
+    margin: 0;
+    padding: 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--fg);
+    max-height: 280px;
+    overflow-y: auto;
+  }
+
+  /* ── Email cards ── */
+  .email-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+  .email-item {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+  }
+  .email-item-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .email-subject { font-weight: 600; font-size: 13px; flex: 1; min-width: 0; }
+  .importance {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    padding: 2px 7px;
+    border-radius: 12px;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .importance-urgent { background: var(--err-dim); color: var(--err); }
+  .importance-normal { background: var(--accent-dim); color: var(--accent); }
+  .importance-low { background: var(--code-bg); color: var(--fg-muted); }
+  .email-from { font-size: 11px; color: var(--fg-muted); margin-bottom: 6px; }
+  .email-summary { font-size: 13px; line-height: 1.5; color: var(--fg); }
+
+  /* ── Reminder list ── */
+  .reminder-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .reminder-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+  }
+  .reminder-time {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+  .reminder-msg { flex: 1; font-size: 13px; min-width: 0; }
+
+  /* ── Empty state ── */
+  .empty {
+    text-align: center;
+    padding: 24px;
+    color: var(--fg-muted);
+    font-size: 13px;
+  }
+
+  /* ── Divider ── */
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--fg-muted);
+    margin: 28px 0 12px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/>
+    </svg>
+    Jarvis Agent Dashboard
+  </div>
+  <div class="spacer"></div>
+  <button id="health-badge" onclick="checkHealth()">
+    <span class="dot"></span>
+    <span id="health-label">Check health</span>
+  </button>
+</header>
+
+<div class="url-bar">
+  <label>API</label>
+  <input id="base-url" type="text" value="http://localhost:8001" spellcheck="false">
+</div>
+
+<!-- ── Health ── -->
+<p class="section-label">Service</p>
+<div class="card">
+  <div class="card-header">
+    <span class="method get">GET</span>
+    <span class="route">/health</span>
+    <button class="btn-secondary" onclick="checkHealth()">Ping</button>
+  </div>
+  <div class="card-body">
+    <div id="health-output" class="response" hidden>
+      <div class="response-meta"><span id="health-status"></span></div>
+      <pre class="output" id="health-body"></pre>
+    </div>
+  </div>
+</div>
+
+<!-- ── Reminder ── -->
+<p class="section-label">Reminders</p>
+<div class="card">
+  <div class="card-header">
+    <span class="method post">POST</span>
+    <span class="route">/remind</span>
+  </div>
+  <div class="card-body">
+    <div class="field-row">
+      <div class="field" style="flex:2">
+        <label>Message</label>
+        <input id="r-message" type="text" placeholder="drink water" value="drink water">
+      </div>
+      <div class="field" style="flex:0 0 auto">
+        <label>Type</label>
+        <select id="r-type" onchange="toggleReminderType()">
+          <option value="delay">Delay</option>
+          <option value="at">At time</option>
+        </select>
+      </div>
+    </div>
+    <div class="field-row">
+      <div id="r-delay-field" class="field">
+        <label>Delay (seconds)</label>
+        <input id="r-delay" type="number" min="5" value="30" placeholder="30">
+      </div>
+      <div id="r-at-field" class="field" hidden>
+        <label>Time (HH:MM)</label>
+        <input id="r-at" type="time" value="09:00">
+      </div>
+      <button class="btn-primary" onclick="scheduleReminder()" style="align-self:flex-end">Schedule</button>
+    </div>
+    <div id="remind-output" class="response" hidden>
+      <div class="response-meta"><span id="remind-status"></span></div>
+      <pre class="output" id="remind-body"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="method get">GET</span>
+    <span class="route">/reminders</span>
+    <button class="btn-secondary" onclick="loadReminders()">Refresh</button>
+  </div>
+  <div class="card-body">
+    <div id="reminders-list"></div>
+  </div>
+</div>
+
+<!-- ── Emails ── -->
+<p class="section-label">Email Digest</p>
+<div class="card">
+  <div class="card-header">
+    <span class="method post">POST</span>
+    <span class="route">/emails/fetch</span>
+    <button class="btn-primary" onclick="fetchEmails()">Fetch &amp; Summarise</button>
+  </div>
+  <div class="card-body">
+    <p style="margin:0 0 8px;color:var(--fg-muted);font-size:13px">
+      Triggers an immediate email fetch + LLM summarise. Same job the daily schedule runs.
+    </p>
+    <div id="fetch-output" class="response" hidden>
+      <div class="response-meta"><span id="fetch-status"></span></div>
+      <pre class="output" id="fetch-body"></pre>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="method get">GET</span>
+    <span class="route">/emails</span>
+    <button class="btn-secondary" onclick="loadEmails()">Refresh</button>
+  </div>
+  <div class="card-body">
+    <div id="emails-list"></div>
+  </div>
+</div>
+
+<script>
+  const base = () => document.getElementById('base-url').value.replace(/\/$/, '');
+
+  async function api(method, path, body) {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(base() + path, opts);
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+  }
+
+  function showResponse(containerId, statusId, bodyId, result) {
+    const el = document.getElementById(containerId);
+    el.hidden = false;
+    const s = document.getElementById(statusId);
+    s.textContent = result.ok ? `${result.status} OK` : `${result.status} Error`;
+    s.className = result.ok ? 'status-ok' : 'status-err';
+    document.getElementById(bodyId).textContent = JSON.stringify(result.data, null, 2);
+  }
+
+  async function checkHealth() {
+    const badge = document.getElementById('health-badge');
+    const label = document.getElementById('health-label');
+    label.textContent = 'Checking…';
+    badge.className = '';
+    try {
+      const r = await api('GET', '/health');
+      badge.className = r.ok ? 'ok' : 'err';
+      label.textContent = r.ok
+        ? `OK · ${r.data.reminders_pending ?? 0} reminders · ${r.data.emails_stored ?? 0} emails`
+        : 'Error';
+      showResponse('health-output', 'health-status', 'health-body', r);
+    } catch (e) {
+      badge.className = 'err';
+      label.textContent = 'Unreachable';
+      const el = document.getElementById('health-output');
+      el.hidden = false;
+      document.getElementById('health-status').textContent = 'Connection failed';
+      document.getElementById('health-status').className = 'status-err';
+      document.getElementById('health-body').textContent = e.message + '\n\nMake sure the agent service is running:\n  python -m src.agent';
+    }
+  }
+
+  function toggleReminderType() {
+    const t = document.getElementById('r-type').value;
+    document.getElementById('r-delay-field').hidden = t === 'at';
+    document.getElementById('r-at-field').hidden   = t === 'delay';
+  }
+
+  async function scheduleReminder() {
+    const message = document.getElementById('r-message').value.trim();
+    if (!message) return;
+    const type = document.getElementById('r-type').value;
+    const body = { message };
+    if (type === 'delay') {
+      body.delay_s = parseInt(document.getElementById('r-delay').value, 10) || 30;
+    } else {
+      const [h, m] = document.getElementById('r-at').value.split(':');
+      const d = new Date();
+      d.setHours(+h, +m, 0, 0);
+      if (d <= new Date()) d.setDate(d.getDate() + 1);
+      body.fires_at = d.toISOString();
+    }
+    try {
+      const r = await api('POST', '/remind', body);
+      showResponse('remind-output', 'remind-status', 'remind-body', r);
+      if (r.ok) loadReminders();
+    } catch (e) {
+      document.getElementById('remind-output').hidden = false;
+      document.getElementById('remind-status').textContent = 'Connection failed';
+      document.getElementById('remind-status').className = 'status-err';
+      document.getElementById('remind-body').textContent = e.message;
+    }
+  }
+
+  async function loadReminders() {
+    try {
+      const r = await api('GET', '/reminders');
+      const el = document.getElementById('reminders-list');
+      if (!r.ok || !r.data.length) {
+        el.innerHTML = '<div class="empty">No pending reminders</div>';
+        return;
+      }
+      el.innerHTML = '<div class="reminder-list">' +
+        r.data.map(row => `
+          <div class="reminder-item">
+            <span class="reminder-time">${row.fires_at ? new Date(row.fires_at).toLocaleString() : '—'}</span>
+            <span class="reminder-msg">${esc(row.message)}</span>
+          </div>`).join('') +
+        '</div>';
+    } catch (_) {
+      document.getElementById('reminders-list').innerHTML =
+        '<div class="empty">Could not reach agent service</div>';
+    }
+  }
+
+  async function fetchEmails() {
+    document.getElementById('fetch-body').textContent = 'Fetching + summarising… (may take a minute)';
+    document.getElementById('fetch-status').textContent = 'Running';
+    document.getElementById('fetch-status').className = '';
+    document.getElementById('fetch-output').hidden = false;
+    try {
+      const r = await api('POST', '/emails/fetch');
+      showResponse('fetch-output', 'fetch-status', 'fetch-body', r);
+      if (r.ok) loadEmails();
+    } catch (e) {
+      document.getElementById('fetch-status').textContent = 'Connection failed';
+      document.getElementById('fetch-status').className = 'status-err';
+      document.getElementById('fetch-body').textContent = e.message;
+    }
+  }
+
+  async function loadEmails() {
+    try {
+      const r = await api('GET', '/emails');
+      const el = document.getElementById('emails-list');
+      if (!r.ok || !r.data.length) {
+        el.innerHTML = '<div class="empty">No emails stored — hit "Fetch &amp; Summarise" first</div>';
+        return;
+      }
+      el.innerHTML = '<div class="email-list">' +
+        r.data.map(row => {
+          const imp = row.importance || 'normal';
+          return `
+            <div class="email-item">
+              <div class="email-item-header">
+                <div class="email-subject">${esc(row.subject || '(no subject)')}</div>
+                <span class="importance importance-${imp}">${imp}</span>
+              </div>
+              <div class="email-from">From: ${esc(row.sender || '—')} &nbsp;·&nbsp; ${row.fetched_at ? new Date(row.fetched_at).toLocaleDateString() : ''}</div>
+              <div class="email-summary">${esc(row.summary || '')}</div>
+            </div>`;
+        }).join('') +
+        '</div>';
+    } catch (_) {
+      document.getElementById('emails-list').innerHTML =
+        '<div class="empty">Could not reach agent service</div>';
+    }
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // Auto-load on open
+  checkHealth();
+  loadReminders();
+  loadEmails();
+</script>
+</body>
+</html>

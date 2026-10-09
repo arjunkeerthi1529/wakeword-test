@@ -37,8 +37,8 @@ from .latency import LatencyTracker
 from .llm.llama_cpp_client import LlamaCppClient
 from .stt.whisper_engine import WhisperEngine
 from .tts.piper_engine import PiperEngine
-from .agent.config import get_agent_config
-from .agent.reminder_agent import parse_tag
+from .work.config import get_agent_config
+from .work.reminder_agent import parse_tag
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,10 +104,10 @@ def main() -> None:
                       aplay_device=cfg.tts_aplay_device)
 
     # ── Agent service link ────────────────────────────────────────────────
-    # Reminders and email digest run in a separate process (python -m src.agent).
+    # Reminders and email digest run in a separate process (python -m src.work).
     # This service only forwards reminder intents via HTTP POST /remind.
     agent_service_url = get_agent_config().agent_service_url
-    logger.info("Agent service URL: %s  (start with: python -m src.agent)", agent_service_url)
+    logger.info("Work service URL: %s  (start with: python -m src.work)", agent_service_url)
 
     # ── Start ─────────────────────────────────────────────────────────────
     hardware.start()
@@ -201,7 +201,7 @@ def _forward_reminder(spec: dict, agent_service_url: str) -> None:
         logger.info("Reminder forwarded to agent service: %r", spec["message"])
     except Exception as exc:
         logger.warning("Agent service unreachable — reminder lost (%s). "
-                       "Start it with: python -m src.agent", exc)
+                       "Start it with: python -m src.work", exc)
 
 
 # ── Streaming listen ──────────────────────────────────────────────────────────

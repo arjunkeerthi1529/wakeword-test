@@ -20,7 +20,7 @@ WorkingDirectory=/home/pi/pi-voice-assistant
 
 EnvironmentFile=/home/pi/pi-voice-assistant/.env
 
-ExecStart=/home/pi/pi-va-env/bin/python -m src.agent
+ExecStart=/home/pi/pi-va-env/bin/python -m src.work
 
 Restart=on-failure
 RestartSec=5

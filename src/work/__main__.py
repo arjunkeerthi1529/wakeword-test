@@ -1,8 +1,8 @@
-"""Agent Service entry point.
+"""Work Service entry point.
 
 Run as a standalone service, completely independent of the voice assistant:
 
-    python -m src.agent
+    python -m src.work
 
 Starts:
   - SQLite database (email summaries + reminders)
@@ -50,13 +50,19 @@ def main() -> None:
     init_schema(conn)
 
     # ── TTS — own instance, independent of voice assistant process ─────────
-    from ..tts.piper_engine import PiperEngine
-    logger.info("Loading Piper TTS model for agent service…")
-    tts = PiperEngine(
-        model_path=main_cfg.piper_voice,
-        aplay_device=main_cfg.tts_aplay_device,
-        output_device=main_cfg.tts_output_device,
-    )
+    # Optional: skipped on Windows / when Piper is not installed.
+    # Reminders will log to console instead of speaking aloud.
+    tts = None
+    try:
+        from ..tts.piper_engine import PiperEngine
+        logger.info("Loading Piper TTS model for agent service…")
+        tts = PiperEngine(
+            model_path=main_cfg.piper_voice,
+            aplay_device=main_cfg.tts_aplay_device,
+            output_device=main_cfg.tts_output_device,
+        )
+    except Exception as exc:
+        logger.warning("TTS not available — reminders will log only (%s)", exc)
 
     # ── Reminder agent ────────────────────────────────────────────────────
     reminder_agent = ReminderAgent(tts=tts, conn=conn)
@@ -86,7 +92,7 @@ def main() -> None:
 
     port = int(os.getenv("AGENT_PORT", "8001"))
     logger.info(
-        "Agent service ready — http://0.0.0.0:%d  (email digest at %s)",
+        "Work service ready — http://0.0.0.0:%d  (email digest at %s)",
         port, agent_cfg.email_fetch_time,
     )
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")

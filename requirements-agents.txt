@@ -1,4 +1,4 @@
-# Agent dependencies — install alongside requirements.txt
+# Work service dependencies — install alongside requirements.txt
 # pip install -r requirements.txt -r requirements-agents.txt
 
 # Daily job scheduler (email digest trigger)
@@ -7,6 +7,6 @@ schedule
 # Load .env file automatically at startup
 python-dotenv
 
-# Agent service HTTP server (python -m src.agent)
+# Work service HTTP server (python -m src.work)
 fastapi
 uvicorn[standard]
