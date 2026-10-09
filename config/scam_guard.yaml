@@ -1,0 +1,24 @@
+# Standalone scam-call warning service — run with:  python -m src.scam
+# Then open http://<pi-ip>:8000 on the phone and tap "Listen to this call".
+
+host: 0.0.0.0
+port: 8000
+
+stt_model: small.en        # same accurate model the assistant uses
+stt_threads: 2             # leave CPU for llama-server; 0 = library default
+stt_beam_size: 2           # drop to 1 if the logged "STT rtf" stays above 1
+
+llm_base_url: http://localhost:8080
+
+led_pin: 22                # warning LED (GPIO). 0 disables. Must not be held by another process.
+mic_device: ""             # "" = system default input; with the assistant running, make that a dsnoop device
+
+chunk_target_s: 4          # past this length even a short pause cuts a chunk
+chunk_max_s: 6             # hard cut even without a pause
+overlap_s: 0.3             # audio carried into the next chunk after a hard cut
+silence_thresh: 0.012
+pause_s: 0.6               # pause that cuts a chunk shorter than chunk_target_s
+llm_cadence_s: 10          # routine LLM review at most this often
+llm_max_tokens: 120        # JSON reply; too low truncates it and the verdict is lost
+llm_timeout_s: 60
+max_session_s: 1800

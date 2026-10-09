@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scam Guard Simulator</title>
+<style>
+  :root {
+    --bg: #eceef2; --surface: #ffffff; --text: #16181d; --muted: #5c6370; --line: #d6dae1;
+    --accent: #1f6feb; --on-accent: #fff; --ok: #1e8e3e; --bad: #d93025; --amber: #d98e04;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b0e13; --surface: #161a21; --text: #e8eaed; --muted: #9aa3b2; --line: #2a303a;
+            --accent: #4c8dff; --on-accent: #07101f; --ok: #5bd17e; --bad: #ff6b61; --amber: #f0b429; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { display: flex; flex-wrap: wrap; gap: 28px; justify-content: center; padding: 24px 16px; }
+  .phone { width: 390px; max-width: 100%; height: 780px; border: 10px solid #20242c; border-radius: 40px;
+    background: var(--surface); overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  .phone iframe { width: 100%; height: 100%; border: 0; display: block; }
+  .panel { width: 440px; max-width: 100%; }
+  h1 { font-size: 1.1rem; margin: 0 0 4px; }
+  h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 0 8px; }
+  p.hint { color: var(--muted); margin: 0 0 12px; font-size: .9rem; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--line); font-size: .85rem; font-weight: 600; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--muted); }
+  .dot.warn { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+  .dot.watch { background: var(--amber); animation: blink 1s steps(2) infinite; }
+  .dot.live { background: var(--ok); }
+  @keyframes blink { 50% { opacity: .15; } }
+  .scenarios { display: grid; gap: 8px; }
+  .sc { display: flex; justify-content: space-between; align-items: center; gap: 10px; text-align: left;
+    width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 12px; cursor: pointer; }
+  .sc:hover { border-color: var(--accent); }
+  .exp { font-size: .72rem; font-weight: 700; padding: 2px 8px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+  .exp.warn { color: var(--bad); } .exp.watch { color: var(--amber); } .exp.none { color: var(--muted); }
+  form { display: flex; gap: 8px; margin-top: 10px; }
+  input[type=text] { flex: 1; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--text); }
+  button.send { font: inherit; font-weight: 700; padding: 0 18px; border: 0; border-radius: 10px;
+    background: var(--accent); color: var(--on-accent); cursor: pointer; }
+  #msg { margin-top: 8px; min-height: 1.3em; font-size: .88rem; color: var(--bad); }
+  #log { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px;
+    height: 190px; overflow-y: auto; font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace; }
+  #log div { border-bottom: 1px dashed var(--line); padding: 2px 0; word-break: break-word; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="phone"><iframe src="/" title="Phone screen"></iframe></div>
+
+  <div class="panel">
+    <h1>Scam Guard simulator</h1>
+    <p class="hint">1) Tap <b>Listen to this call</b> in the phone. 2) Click lines below as if heard on the call.
+       The real rules, call logic and phone page react.</p>
+
+    <div class="row">
+      <span class="chip"><span id="ledDot" class="dot"></span>Pi LED: <span id="ledText">off</span></span>
+    </div>
+
+    <h2>Say as if heard on the call</h2>
+    <div class="scenarios" id="scenarios"></div>
+    <form id="form">
+      <input id="free" type="text" placeholder="Type any line…" autocomplete="off">
+      <button class="send" type="submit">Say</button>
+    </form>
+    <div id="msg"></div>
+
+    <h2>Events from the Pi</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const SCENARIOS = [
+    { t: "We have sent a code to your phone.", e: "none" },
+    { t: "Please read that code to me.", e: "warn" },
+    { t: "I won't share my code.", e: "none" },
+    { t: "Never share your OTP with anyone.", e: "none" },
+    { t: "Please install AnyDesk so I can help you.", e: "warn" },
+    { t: "Transfer the money immediately to the safe account.", e: "warn" },
+    { t: "Scan this QR code to receive your refund.", e: "warn" },
+    { t: "I'm calling from SBI head office, your account will be blocked today.", e: "watch" },
+    { t: "Which bank are you calling from?", e: "none" },
+    { split: ["We sent you a code, please", "read that code to me"], label: "Split across two chunks: “we sent you a code, please” + “read that code to me”", e: "warn" },
+  ];
+  const LABEL = { warn: "expect warning", watch: "expect watch", none: "expect no alert" };
+
+  async function say(text) {
+    $("msg").textContent = "";
+    const r = await fetch("/sim/say", { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify({ text }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); $("msg").textContent = d.detail || "Failed."; return false; }
+    return true;
+  }
+
+  SCENARIOS.forEach((s) => {
+    const b = document.createElement("button"); b.className = "sc"; b.type = "button";
+    const span = document.createElement("span"); span.textContent = s.label || "“" + s.t + "”";
+    const exp = document.createElement("span"); exp.className = "exp " + s.e; exp.textContent = LABEL[s.e];
+    b.appendChild(span); b.appendChild(exp);
+    b.addEventListener("click", async () => {
+      if (s.split) { if (await say(s.split[0])) setTimeout(() => say(s.split[1]), 1200); }
+      else say(s.t);
+    });
+    $("scenarios").appendChild(b);
+  });
+
+  $("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const v = $("free").value.trim(); if (!v) return;
+    say(v).then((ok) => { if (ok) $("free").value = ""; });
+  });
+
+  function log(ev) {
+    const d = document.createElement("div");
+    let extra = "";
+    if (ev.type === "transcript") extra = ev.segment_id + " " + ev.text;
+    else if (ev.type === "warning") extra = ev.risk + " rev" + ev.revision + " (" + ev.source + ") " + (ev.evidence || "");
+    else extra = ev.message || ev.reason || (ev.active === undefined ? "" : "active=" + ev.active);
+    d.textContent = ev.type + (extra ? " — " + extra : "");
+    const box = $("log"); box.appendChild(d); box.scrollTop = box.scrollHeight;
+  }
+  const ws = new WebSocket((location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/events");
+  ws.onmessage = (m) => { try { const ev = JSON.parse(m.data); if (ev.event_id) log(ev); } catch (e) {} };
+  setInterval(() => { try { ws.send("ping"); } catch (e) {} }, 15000);
+
+  async function poll() {
+    try {
+      const s = await (await fetch("/sim/state")).json();
+      $("ledText").textContent = s.led === "warn" ? "ON (warning)" : s.led === "watch" ? "blinking (watch)" : "off";
+      $("ledDot").className = "dot " + (s.led === "warn" ? "warn" : s.led === "watch" ? "watch" : "");
+    } catch (e) {}
+  }
+  setInterval(poll, 700); poll();
+})();
+</script>
+</body>
+</html>

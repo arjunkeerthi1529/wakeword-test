@@ -40,7 +40,3 @@ class HardwareIO(ABC):
     @abstractmethod
     def set_indicator(self, stage: str):
         """Reflect the current pipeline stage on the visible listening indicator."""
-
-    @abstractmethod
-    def set_warning(self, level: str):
-        """Scam-warning indicator: "warn", "watch", or "off"."""

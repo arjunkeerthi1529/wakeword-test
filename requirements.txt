@@ -4,7 +4,3 @@ numpy
 piper-tts
 requests
 openwakeword
-faster-whisper
-fastapi
-uvicorn
-websockets

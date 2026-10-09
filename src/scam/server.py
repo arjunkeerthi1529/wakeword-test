@@ -123,7 +123,8 @@ class ScamServer:
 
         return app
 
-    def start_in_thread(self) -> None:
+    def run(self) -> None:
+        """Serve in the foreground until interrupted."""
         import importlib.util
 
         import uvicorn
@@ -133,10 +134,5 @@ class ScamServer:
                 "No WebSocket library installed — the phone page will load but show 'Connection lost'. "
                 "Run: pip install websockets   (then restart)"
             )
-
-        config = uvicorn.Config(
-            self.app, host=self.cfg.host, port=self.cfg.port, log_level="warning",
-        )
-        server = uvicorn.Server(config)
-        threading.Thread(target=server.run, daemon=True, name="scam-server").start()
         logger.info("Scam Guard page: http://<pi-ip>:%d  (phone must be on the same Wi-Fi)", self.cfg.port)
+        uvicorn.run(self.app, host=self.cfg.host, port=self.cfg.port, log_level="warning")

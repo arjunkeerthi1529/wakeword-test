@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -8,23 +8,6 @@ import yaml
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 _config: Optional["Config"] = None
-
-
-@dataclass
-class SpamGuardConfig:
-    enabled:         bool  = False
-    host:            str   = "0.0.0.0"
-    port:            int   = 8000
-    stt_beam_size:   int   = 2
-    chunk_target_s:  float = 4.0
-    chunk_max_s:     float = 6.0
-    overlap_s:       float = 0.3
-    silence_thresh:  float = 0.012
-    pause_s:         float = 0.6
-    llm_cadence_s:   float = 10.0
-    llm_max_tokens:  int   = 120
-    llm_timeout_s:   float = 60.0
-    max_session_s:   float = 1800.0
 
 
 @dataclass
@@ -39,7 +22,6 @@ class Config:
     gpio_listen_led_pin: int
     gpio_online_led_pin: int
     log_latency_csv:     bool
-    spam_guard:          SpamGuardConfig = field(default_factory=SpamGuardConfig)
 
 
 def get_config() -> Config:
@@ -71,15 +53,5 @@ def get_config() -> Config:
         gpio_listen_led_pin=int(gpio_cfg.get("listening_led_pin", 27)),
         gpio_online_led_pin=int(gpio_cfg.get("online_led_pin", 22)),
         log_latency_csv=raw.get("log_latency_csv", True),
-        spam_guard=_load_spam_guard(raw.get("spam_guard") or {}),
     )
     return _config
-
-
-def _load_spam_guard(raw: dict) -> SpamGuardConfig:
-    defaults = SpamGuardConfig()
-    kwargs = {}
-    for name, default in vars(defaults).items():
-        if name in raw:
-            kwargs[name] = type(default)(raw[name])
-    return SpamGuardConfig(**kwargs)

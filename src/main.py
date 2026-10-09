@@ -2,12 +2,9 @@
 
 Real-time conversation pipeline on Raspberry Pi 4:
   openWakeWord ("Hey Jarvis")
-    → faster-whisper small.en STT
+    → live streaming STT (tiny.en preview + small.en final)
     → llama.cpp LLM (streaming tokens)
     → sentence-by-sentence Piper TTS (plays while LLM still generating)
-
-With spam_guard.enabled in the config, a live scam-call monitor also runs
-(phone page on port 8000); the assistant pauses while a call is monitored.
 
 Per-stage latency printed after every turn and appended to latency_log.csv.
 
@@ -93,21 +90,6 @@ def main() -> None:
     stt = WhisperEngine(model_name=cfg.stt_model_name)
     llm = LlamaCppClient(base_url=cfg.llm_base_url)
     tts = PiperEngine(model_path=cfg.piper_voice)
-
-    # ── Live scam-call warning (optional, runs alongside the assistant) ───
-    if cfg.spam_guard.enabled:
-        try:
-            from .scam.monitor import ScamMonitor
-            from .scam.server import ScamServer
-        except ImportError as e:
-            logger.error("spam_guard enabled but a dependency is missing (%s) — "
-                         "run: pip install fastapi uvicorn. Assistant continues without it.", e)
-        else:
-            scam_server = ScamServer(cfg.spam_guard)
-            scam_server.monitor = ScamMonitor(
-                cfg.spam_guard, audio, gate, stt, llm, hardware, on_event=scam_server.publish,
-            )
-            scam_server.start_in_thread()
 
     # ── Start ─────────────────────────────────────────────────────────────
     hardware.start()

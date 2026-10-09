@@ -1,0 +1,9 @@
+pyyaml
+numpy
+sounddevice
+requests
+faster-whisper
+fastapi
+uvicorn
+websockets
+gpiozero

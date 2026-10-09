@@ -1,0 +1,18 @@
+# Optional: run Scam Guard as a background service that starts on boot.
+#   sudo cp scripts/scam-guard.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now scam-guard
+#   journalctl -u scam-guard -f        # logs
+[Unit]
+Description=Scam Guard live call warning
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+User=makeathon21
+WorkingDirectory=/home/makeathon21/makeathon21/wakeword-test
+ExecStart=/home/makeathon21/pi-va-env/bin/python -m src.scam
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

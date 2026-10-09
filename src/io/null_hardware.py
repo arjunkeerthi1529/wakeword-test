@@ -24,7 +24,3 @@ class NullHardwareIO(HardwareIO):
 
     def set_indicator(self, stage: str):
         pass  # no LED to drive
-
-    def set_warning(self, level: str):
-        if level != "off":
-            logger.warning("SCAM WARNING LED -> %s", level.upper())

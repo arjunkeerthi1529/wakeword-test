@@ -37,13 +37,12 @@ _DEFAULT_PRESSURE_MESSAGE = (
 
 
 class ScamMonitor:
-    def __init__(self, cfg, audio, gate, stt, llm, hardware, on_event: Callable[[dict], None]):
+    def __init__(self, cfg, mic, stt, llm, led, on_event: Callable[[dict], None]):
         self.cfg = cfg                      # SpamGuardConfig
-        self.audio = audio
-        self.gate = gate
-        self.stt = stt
-        self.llm = llm
-        self.hardware = hardware
+        self.mic = mic                      # MicSource: start() -> Queue, stop()
+        self.stt = stt                      # ScamSTT
+        self.llm = llm                      # ScamLLM
+        self.led = led                      # WarningLED
         self.on_event = on_event
 
         self._lock = threading.RLock()
@@ -66,8 +65,9 @@ class ScamMonitor:
         with self._lock:
             if self._session is not None:
                 raise RuntimeError("Already monitoring a call")
-            if self.hardware.muted:
-                raise RuntimeError("Microphone is muted")
+
+            listener = self.mic.start()         # raises RuntimeError if the mic is busy/unavailable
+            self._listener = listener
 
             session = Session()
             stop_evt = threading.Event()
@@ -80,12 +80,6 @@ class ScamMonitor:
             self._audio_gap = False
             self._last_block_t = time.monotonic()
 
-            # Assistant steps aside: no wake detection, nothing forwarded.
-            self.gate.sleep()
-            self.gate.paused = True
-            self._listener = self.audio.add_listener()
-            listener = self._listener
-
             for name, target, args in (
                 ("scam-segmenter", self._segment_loop, (session, stop_evt, listener, chunks)),
                 ("scam-stt", self._stt_loop, (session, stop_evt, chunks)),
@@ -94,7 +88,6 @@ class ScamMonitor:
                 threading.Thread(target=target, args=args, daemon=True, name=name).start()
 
             self._emit("listening", session=session, message="Monitoring started")
-        self.hardware.set_indicator("listening")
         logger.info("Scam monitoring started — call %s", session.call_id)
         return session.call_id
 
@@ -105,16 +98,12 @@ class ScamMonitor:
                 return
             self._session = None
             self._stop_evt.set()
-            if self._listener is not None:
-                self.audio.remove_listener(self._listener)
-                self._listener = None
-            self.gate.paused = False
-            self.gate.sleep()
+            self._listener = None
+            self.mic.stop()
             alerts = len(session.alerts)
             segments = len(session.segments)
             self._emit("stopped", session=session, reason=reason, message="Monitoring stopped")
-        self.hardware.set_warning("off")
-        self.hardware.set_indicator("waiting_for_wake")
+        self.led.set("off")
         logger.info("Scam monitoring stopped (%s) — %d segments, %d alerts", reason, segments, alerts)
 
     def snapshot(self) -> dict:
@@ -311,7 +300,7 @@ class ScamMonitor:
 
             overall = session.max_level()
             self._emit("warning", session=session, vibrate=vibrate, **self._alert_fields(alert))
-        self.hardware.set_warning(overall)
+        self.led.set(overall)
 
     # ── LLM review scheduling (one request in flight) ─────────────────────
 
