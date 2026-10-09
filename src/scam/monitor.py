@@ -8,6 +8,7 @@ import collections
 import logging
 import math
 import queue
+import re
 import threading
 import time
 from typing import Callable, Dict, List, Optional
@@ -17,15 +18,20 @@ import numpy as np
 from . import rules
 from .datalog import DataLog
 from .llm_review import SYSTEM_PROMPT, ReviewResult, Snapshot, build_snapshot, validate
-from .session import Alert, Session, rank
+from .session import Alert, Session, rank, trim_overlap
 
 logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16_000
 MIN_SPEECH_S = 0.4          # shorter bursts (coughs, clicks) are discarded
-SHORT_PAUSE_S = 0.25        # pause that cuts a chunk once it is past chunk_target_s
 PREROLL_BLOCKS = 2          # audio kept before speech starts so first words aren't clipped
 NO_AUDIO_WARN_S = 5.0
+FRAGMENT_FLUSH_S = 4.0      # a held-back unfinished sentence is committed alone after this long
+_SENT_END = re.compile(r"(?<=[.!?])\s+")
+
+
+def split_sentences(text: str) -> List[str]:
+    return [part for part in _SENT_END.split(text.strip()) if part]
 
 SCAM_STT_PROMPT = (
     "A phone call about a bank account: OTP, one time password, verification code, "
@@ -64,6 +70,9 @@ class ScamMonitor:
         self._audio_gap = False
         self._last_block_t = 0.0
         self._stt_busy = False
+        self._fragment = ""                # unfinished last sentence of a forced chunk cut
+        self._fragment_start_ms = 0
+        self._fragment_t = 0.0
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -90,6 +99,7 @@ class ScamMonitor:
             self._audio_gap = False
             self._last_block_t = time.monotonic()
             self._seg_cut = {}
+            self._fragment = ""
             self.datalog.write(
                 "call_start", session.call_id,
                 stt_model=getattr(self.cfg, "stt_model", ""), stt_threads=self.cfg.stt_threads,
@@ -190,9 +200,9 @@ class ScamMonitor:
         t_s = 0.0
         chunk_start_s = 0.0
 
-        def emit_chunk(end_s: float) -> None:
+        def emit_chunk(end_s: float, hard: bool = False) -> None:
             audio = np.concatenate(buf).astype(np.float32)
-            chunks.put((audio, int(chunk_start_s * 1000), int(end_s * 1000), time.monotonic()))
+            chunks.put((audio, int(chunk_start_s * 1000), int(end_s * 1000), time.monotonic(), hard))
 
         while not stop_evt.is_set():
             try:
@@ -221,7 +231,7 @@ class ScamMonitor:
                 buf.append(flat)
                 dur_s += block_s
                 silence_s += block_s
-                needed = cfg.pause_s if dur_s < cfg.chunk_target_s else SHORT_PAUSE_S
+                needed = cfg.pause_s if dur_s < cfg.chunk_target_s else cfg.short_pause_s
                 if silence_s >= needed:
                     has_speech = dur_s - silence_s >= MIN_SPEECH_S
                     if has_speech and (self._stt_busy or not chunks.empty()):
@@ -236,7 +246,7 @@ class ScamMonitor:
                 preroll.append(flat)
 
             if speaking and dur_s >= cfg.chunk_max_s:
-                emit_chunk(t_s)
+                emit_chunk(t_s, hard=True)      # cut mid-speech: the last sentence may be unfinished
                 keep = max(1, math.ceil(cfg.overlap_s / block_s))
                 buf = buf[-keep:]
                 dur_s = len(buf) * block_s
@@ -248,8 +258,9 @@ class ScamMonitor:
     def _stt_loop(self, session, stop_evt, chunks) -> None:
         while not stop_evt.is_set():
             try:
-                audio, start_ms, end_ms, cut_mono = chunks.get(timeout=1.0)
+                audio, start_ms, end_ms, cut_mono, hard = chunks.get(timeout=1.0)
             except queue.Empty:
+                self._flush_stale_fragment(session)
                 self._maybe_dispatch_llm(session)    # lets the routine cadence fire during quiet spells
                 continue
 
@@ -280,10 +291,40 @@ class ScamMonitor:
 
             if stop_evt.is_set():
                 return
-            self._commit(session, text, start_ms, end_ms, cut_mono)
+            self._commit(session, text, start_ms, end_ms, cut_mono, hard)
 
     def _commit(self, session: Session, text: str, start_ms: int, end_ms: int,
-                cut_mono: float) -> None:
+                cut_mono: float, hard: bool) -> None:
+        """Join any held-back unfinished sentence with this chunk's text. When the chunk
+        was cut mid-speech, hold back its last sentence (it may be cut in half) and
+        commit only the complete ones, so a request split across chunks reaches the
+        rules and the LLM as one sentence."""
+        text = text.strip()
+        if self._fragment:
+            start_ms = self._fragment_start_ms
+            text = f"{self._fragment} {trim_overlap(self._fragment, text)}".strip()
+            self._fragment = ""
+        if hard and text:
+            sentences = split_sentences(text)
+            self._fragment = sentences[-1]
+            self._fragment_t = time.monotonic()
+            if len(sentences) == 1:
+                self._fragment_start_ms = start_ms
+                text = ""
+            else:
+                text = " ".join(sentences[:-1])
+                self._fragment_start_ms = end_ms     # approximate: the tail begins near the end
+        if text:
+            self._commit_segment(session, text, start_ms, end_ms, cut_mono)
+
+    def _flush_stale_fragment(self, session: Session) -> None:
+        if self._fragment and time.monotonic() - self._fragment_t > FRAGMENT_FLUSH_S:
+            text, start_ms = self._fragment, self._fragment_start_ms
+            self._fragment = ""
+            self._commit_segment(session, text, start_ms, start_ms, self._fragment_t)
+
+    def _commit_segment(self, session: Session, text: str, start_ms: int, end_ms: int,
+                        cut_mono: float) -> None:
         with self._lock:
             if self._session is not session:
                 return
@@ -305,9 +346,13 @@ class ScamMonitor:
                        start_ms=seg.start_ms, end_ms=seg.end_ms, text=seg.text)
 
         result = rules.evaluate(seg.text, seg.id, prev)
+        shadow = not self.cfg.rules_enabled
         self.datalog.write("rule", session.call_id, segment_id=seg.id, level=result.level,
-                           label=result.label, evidence=result.evidence)
-        if result.level != "none":
+                           label=result.label, evidence=result.evidence, shadow=shadow)
+        if result.level != "none" and shadow:
+            logger.info("RULE (shadow, no alert) %s: %s/%s — %r", seg.id, result.level,
+                        result.label, result.evidence)
+        elif result.level != "none":
             logger.info("RULE %s: %s/%s — %r", seg.id, result.level, result.label, result.evidence)
             self._raise(
                 session, level=result.level, label=result.label, evidence=result.evidence,
@@ -372,6 +417,8 @@ class ScamMonitor:
                 return
             snap = build_snapshot(session)
             if snap is None:
+                # Everything pending is trivial ("Hello?", "Okay."): nothing to review.
+                session.reviewed_upto = len(session.segments)
                 return
             session.llm_busy = True
             session.last_dispatch = now
@@ -429,7 +476,8 @@ class ScamMonitor:
                 session.reviewed_upto = max(session.reviewed_upto, snap.upto_index)
                 self._emit("processing", session=session, active=False, message="")
                 if result is not None and result.risk != "none":
-                    if rules.looks_like_safety_advice(result.evidence):
+                    advice_line = rules.looks_like_safety_advice(result.evidence)
+                    if advice_line and self.cfg.llm_advice_veto:
                         logger.info("LLM %s on %s ignored: the line is a refusal or safety advice",
                                     result.risk, result.segment_id)
                         self.datalog.write("llm_veto", snap.call_id, segment_id=result.segment_id,

@@ -25,7 +25,16 @@ chunk_target_s: 5          # past this length even a short pause cuts a chunk (o
 chunk_max_s: 10            # hard cut even without a pause
 overlap_s: 0.3             # audio carried into the next chunk after a hard cut
 silence_thresh: 0.012
-pause_s: 0.6               # pause that cuts a chunk shorter than chunk_target_s
+pause_s: 0.9               # silence that ends a chunk shorter than chunk_target_s (longer = fewer half-sentences)
+short_pause_s: 0.5         # silence that ends a chunk once it is past chunk_target_s
+
+# false = rely only on the LLM. The rules still run and are recorded in the log as
+# "shadow" results (what they would have said) so the two can be compared afterwards.
+rules_enabled: false
+
+# Independent of the switch above: ignore an LLM warning when the line only mentions a code/PIN/
+# password inside a refusal or safety advice ("don't share your OTP with anyone").
+llm_advice_veto: true
 llm_cadence_s: 10          # send new speech to the LLM every 10 s (next one waits if the previous is still running)
 llm_max_tokens: 12         # reply is one short line like "warn s4 caller" (~5 tokens)
 llm_timeout_s: 90

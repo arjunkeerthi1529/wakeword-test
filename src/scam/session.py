@@ -27,6 +27,19 @@ def _words(text: str) -> List[str]:
     return _WORD.findall(text.lower())
 
 
+def trim_overlap(prev_text: str, text: str) -> str:
+    """Drop leading words of `text` that repeat the tail of `prev_text` (audio
+    overlap between chunks makes the same words appear twice)."""
+    prev_words = _words(prev_text)
+    words = text.split()
+    norm = [(_words(w) or [""])[0] for w in words]
+    max_n = min(_MAX_OVERLAP_WORDS, len(prev_words), len(norm))
+    for n in range(max_n, 0, -1):
+        if prev_words[-n:] == norm[:n]:
+            return " ".join(words[n:]).strip()
+    return text.strip()
+
+
 @dataclass
 class Segment:
     id: str
@@ -68,14 +81,7 @@ class Session:
             return None
         if self.segments:
             prev_words = _words(self.segments[-1].text)
-            words = text.split()
-            norm = [(_words(w) or [""])[0] for w in words]
-            max_n = min(_MAX_OVERLAP_WORDS, len(prev_words), len(norm))
-            for n in range(max_n, 0, -1):
-                if prev_words[-n:] == [(_words(w) or [""])[0] for w in words[:n]]:
-                    words = words[n:]
-                    break
-            text = " ".join(words).strip()
+            text = trim_overlap(self.segments[-1].text, text)
             if not text or _words(text) == prev_words:
                 return None
         seg = Segment(f"s{self.next_segment_no}", start_ms, end_ms, text)

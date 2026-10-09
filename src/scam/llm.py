@@ -34,14 +34,15 @@ _TIMING_KEYS = ("prompt_n", "prompt_ms", "predicted_n", "predicted_ms")
 
 
 class ScamLLM:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, model: str = "local"):
         self.base_url = base_url.rstrip("/")
+        self.model = model                    # llama-server ignores it; Ollama needs a real name
         self.mode = "grammar"                 # "grammar" (fast) or "schema" (fallback)
         self._http = requests.Session()       # keep-alive: no new connection per review
 
     def _payload(self, system: str, user: str, max_tokens: int) -> dict:
         payload = {
-            "model": "local",
+            "model": self.model,
             "messages": [
                 {"role": "system", "content": system},   # static prefix -> server reuses its KV cache
                 {"role": "user", "content": user},

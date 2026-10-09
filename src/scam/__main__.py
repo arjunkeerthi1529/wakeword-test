@@ -55,7 +55,7 @@ def main() -> None:
         logger.info("Analysis log (transcripts, not audio): %s", log_path)
     datalog = DataLog(log_path)
 
-    llm = ScamLLM(cfg.llm_base_url)
+    llm = ScamLLM(cfg.llm_base_url, cfg.llm_model)
     check_llm(llm, cfg)
 
     server = ScamServer(cfg)
