@@ -61,7 +61,10 @@ class ScamSTT:
                 initial_prompt=initial_prompt,
                 no_speech_threshold=0.4,
                 condition_on_previous_text=False,
-                temperature=0.0,            # no fallback re-decodes at higher temperatures
+                # Retry a bad decode (garbled/looping output) at a slightly higher
+                # temperature. Retries reuse the encoder output, so they only cost
+                # decoder time, not another 30 s-window encode.
+                temperature=(0.0, 0.2, 0.4),
                 without_timestamps=True,    # fewer tokens to decode
             )
             text = " ".join(s.text.strip() for s in segments).strip()

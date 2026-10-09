@@ -25,7 +25,7 @@ class SpamGuardConfig:
     silence_thresh:  float = 0.012
     pause_s:         float = 0.6
     llm_cadence_s:   float = 10.0
-    llm_max_tokens:  int   = 40
+    llm_max_tokens:  int   = 12
     llm_timeout_s:   float = 90.0
     max_session_s:   float = 1800.0
 
@@ -43,4 +43,6 @@ def load_config(path: Path = None) -> SpamGuardConfig:
             kwargs[name] = type(default)(raw[name])
     if os.getenv("LLM_BASE_URL"):
         kwargs["llm_base_url"] = os.environ["LLM_BASE_URL"]
+    if os.getenv("STT_MODEL"):                       # quick A/B: STT_MODEL=small.en python -m src.scam
+        kwargs["stt_model"] = os.environ["STT_MODEL"]
     return SpamGuardConfig(**kwargs)

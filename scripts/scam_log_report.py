@@ -104,6 +104,12 @@ def report(cid, recs):
     print("  commit ", stats([s["since_cut_s"] for s in segs]), "(chunk cut -> text available)")
     print("LLM      ", stats([r["duration_s"] for r in llm]),
           f"| errors: {sum(1 for r in llm if r.get('error'))} | invalid: {sum(1 for r in llm if not r.get('error') and r.get('verdict') is None)}")
+    timed = [r["timings"] for r in llm if r.get("timings")]
+    if timed:
+        print("  prompt ", stats([t["prompt_ms"] / 1000 for t in timed if "prompt_ms" in t]),
+              f"| tokens in: {[t.get('prompt_n') for t in timed]}")
+        print("  decode ", stats([t["predicted_ms"] / 1000 for t in timed if "predicted_ms" in t]),
+              f"| tokens out: {[t.get('predicted_n') for t in timed]}")
     verdicts = defaultdict(int)
     for r in llm:
         if r.get("verdict"):

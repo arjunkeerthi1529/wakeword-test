@@ -51,15 +51,15 @@ class SimLLM:
     """Stand-in for llama-server: flags obvious requests after a short delay."""
     _KEYWORDS = ("code", "otp", "pin", "password", "cvv", "anydesk", "teamviewer", "transfer", "qr")
 
-    def complete_json(self, system, user, schema, max_tokens, timeout):
+    def review(self, system, user, max_tokens, timeout):
         time.sleep(2.0)
         lines = user.split("NEW segments:")[-1].splitlines()
         for line in lines:
             m = re.match(r'\s*(s\d+) \[[\d:]+\] "(.*)"', line)
             if m and any(k in m.group(2).lower() for k in self._KEYWORDS) \
                     and not re.search(r"\b(never|won't|don't|not)\b", m.group(2).lower()):
-                return json.dumps({"risk": "warn", "evidence_id": m.group(1), "speaker": "caller"})
-        return json.dumps({"risk": "none", "evidence_id": "", "speaker": "unknown"})
+                return f"warn {m.group(1)} caller", {}
+        return "none", {}
 
 
 class SimMonitor(ScamMonitor):

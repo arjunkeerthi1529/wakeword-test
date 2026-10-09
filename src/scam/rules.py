@@ -54,12 +54,18 @@ _PRESSURE = re.compile(
     r"(?:sim|number|account|card) (?:will be|has been|is) (?:blocked|suspended|frozen|deactivated|closed)|"
     r"kyc (?:update|expired|pending)|lottery|prize|you (?:have )?won|"
     r"electricity (?:will be )?(?:cut|disconnected)|"
-    r"don'?t tell anyone|keep (?:this|it) (?:secret|confidential)|"
-    r"calling from (?:the )?(?:\w+ )?(?:bank|head office|rbi|income tax)|"
-    r"(?:police|polish|cyber ?crime|crime branch|cbi|income tax|customs|rbi|bank|telecom|trai) "
+    r"don'?t (?:tell|call|talk to|inform|contact) (?:anyone|anybody|any one|your family)|"
+    r"keep (?:this|it) (?:secret|confidential)|"
+    r"criminal (?:case|charge|complaint|place|activity)|"
+    r"linked to (?:a |an )?(?:criminal|crime|fraud|money laundering)|"
+    r"(?:under|during) (?:the )?investigation|"
+    r"calling from (?:the )?(?:\w+ )?(?:bank(?:ing)?|head office|rbi|income tax)|"
+    r"(?:police|polish|cyber ?crime|crime branch|cbi|income tax|customs|rbi|bank(?:ing)?|telecom|trai) "
     r"(?:department|station|officer|branch|office)|"
     r"(?:we|i) (?:am|are|'m|'re) (?:calling )?from (?:the )?"
-    r"(?:police|polish|bank|rbi|income tax|customs|cbi|cyber|telecom|trai))\b"
+    r"(?:police|polish|bank(?:ing)?|rbi|income tax|customs|cbi|cyber|telecom|trai)|"
+    r"(?:need|have|must|want) to verify your \w+|"
+    r"verify your (?:account|identity|kyc|details|card|information|number))\b"
 )
 
 _NEGATION = re.compile(
@@ -107,7 +113,7 @@ def _negated(text: str, match: re.Match) -> bool:
     """True if the clause containing the match is a refusal or safety advice."""
     clause_start = max(text.rfind(".", 0, match.start()), text.rfind("?", 0, match.start()),
                        text.rfind("!", 0, match.start()), text.rfind(",", 0, match.start()))
-    window = text[clause_start + 1: match.end()]
+    window = text[clause_start + 1: match.start()]     # only what precedes the match
     return bool(_NEGATION.search(window))
 
 

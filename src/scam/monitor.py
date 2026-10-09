@@ -16,7 +16,7 @@ import numpy as np
 
 from . import rules
 from .datalog import DataLog
-from .llm_review import SCHEMA, SYSTEM_PROMPT, ReviewResult, Snapshot, build_snapshot, validate
+from .llm_review import SYSTEM_PROMPT, ReviewResult, Snapshot, build_snapshot, validate
 from .session import Alert, Session, rank
 
 logger = logging.getLogger(__name__)
@@ -384,10 +384,11 @@ class ScamMonitor:
         result: Optional[ReviewResult] = None
         transport_error: Optional[Exception] = None
         raw: Optional[str] = None
+        timings: dict = {}
         t0 = time.monotonic()
         try:
-            raw = self.llm.complete_json(
-                SYSTEM_PROMPT, snap.prompt, SCHEMA,
+            raw, timings = self.llm.review(
+                SYSTEM_PROMPT, snap.prompt,
                 max_tokens=self.cfg.llm_max_tokens, timeout=self.cfg.llm_timeout_s,
             )
             result = validate(raw, snap)
@@ -397,7 +398,7 @@ class ScamMonitor:
         except Exception as exc:
             transport_error = exc
         self.datalog.write(
-            "llm", snap.call_id, duration_s=round(time.monotonic() - t0, 2),
+            "llm", snap.call_id, duration_s=round(time.monotonic() - t0, 2), timings=timings,
             segments=[s.id for s in snap.new_segments], prompt=snap.prompt, raw=raw,
             verdict=({"risk": result.risk, "segment_id": result.segment_id, "speaker": result.speaker}
                      if result else None),
