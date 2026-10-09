@@ -61,6 +61,8 @@ class ScamSTT:
                 initial_prompt=initial_prompt,
                 no_speech_threshold=0.4,
                 condition_on_previous_text=False,
+                temperature=0.0,            # no fallback re-decodes at higher temperatures
+                without_timestamps=True,    # fewer tokens to decode
             )
             text = " ".join(s.text.strip() for s in segments).strip()
         return drop_repetition_hallucination(text)

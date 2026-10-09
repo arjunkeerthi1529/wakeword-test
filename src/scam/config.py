@@ -19,13 +19,13 @@ class SpamGuardConfig:
     led_pin:         int   = 22          # 0 disables the LED
     mic_device:      str   = ""          # "" = system default input
     chunk_target_s:  float = 5.0
-    chunk_max_s:     float = 8.0
+    chunk_max_s:     float = 10.0
     overlap_s:       float = 0.3
     silence_thresh:  float = 0.012
     pause_s:         float = 0.6
     llm_cadence_s:   float = 10.0
-    llm_max_tokens:  int   = 120
-    llm_timeout_s:   float = 120.0
+    llm_max_tokens:  int   = 40
+    llm_timeout_s:   float = 90.0
     max_session_s:   float = 1800.0
 
 

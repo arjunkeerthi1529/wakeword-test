@@ -34,6 +34,11 @@ SCAM_STT_PROMPT = (
 _DEFAULT_PRESSURE_MESSAGE = (
     "Possible pressure or impersonation was heard. Don't share codes or send money."
 )
+_LLM_MESSAGES = {
+    "warn": "The on-device assistant flagged this as a likely scam request. "
+            "Don't share codes or send money; verify through the official app or a number you looked up yourself.",
+    "watch": "The on-device assistant noticed possible pressure or impersonation. Stay cautious.",
+}
 
 
 class ScamMonitor:
@@ -54,6 +59,7 @@ class ScamMonitor:
         self._llm_failing = False
         self._audio_gap = False
         self._last_block_t = 0.0
+        self._stt_busy = False
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -200,9 +206,15 @@ class ScamMonitor:
                 silence_s += block_s
                 needed = cfg.pause_s if dur_s < cfg.chunk_target_s else SHORT_PAUSE_S
                 if silence_s >= needed:
-                    if dur_s - silence_s >= MIN_SPEECH_S:
-                        emit_chunk(t_s)
-                    buf, speaking, silence_s, dur_s = [], False, 0.0, 0.0
+                    has_speech = dur_s - silence_s >= MIN_SPEECH_S
+                    if has_speech and (self._stt_busy or not chunks.empty()):
+                        # Every chunk costs a full fixed-size decode, so while STT is
+                        # still busy keep batching speech instead of queuing short chunks.
+                        pass
+                    else:
+                        if has_speech:
+                            emit_chunk(t_s)
+                        buf, speaking, silence_s, dur_s = [], False, 0.0, 0.0
             else:
                 preroll.append(flat)
 
@@ -226,6 +238,7 @@ class ScamMonitor:
 
             backlog = chunks.qsize()
             t0 = time.monotonic()
+            self._stt_busy = True
             try:
                 text = self.stt.transcribe(
                     audio, beam_size=self.cfg.stt_beam_size, initial_prompt=SCAM_STT_PROMPT,
@@ -235,6 +248,8 @@ class ScamMonitor:
                 self._emit("error", session=session, code="stt_failed",
                            message="May have missed speech.")
                 continue
+            finally:
+                self._stt_busy = False
             elapsed = time.monotonic() - t0
             audio_s = len(audio) / SAMPLE_RATE
             logger.info("STT rtf=%.2f (%.1fs audio in %.1fs, backlog=%d)",
@@ -356,11 +371,10 @@ class ScamMonitor:
                 session.reviewed_upto = max(session.reviewed_upto, snap.upto_index)
                 self._emit("processing", session=session, active=False, message="")
                 if result is not None and result.risk != "none":
-                    message = f"{result.reason} {result.advice}".strip() or _DEFAULT_PRESSURE_MESSAGE
                     self._raise(
                         session, level=result.risk, label="llm", evidence=result.evidence,
-                        segment_id=result.segment_id, message=message, source="llm",
-                        speaker=result.speaker, reason=result.reason, advice=result.advice,
+                        segment_id=result.segment_id, message=_LLM_MESSAGES[result.risk],
+                        source="llm", speaker=result.speaker,
                     )
         self._maybe_dispatch_llm(session)
 

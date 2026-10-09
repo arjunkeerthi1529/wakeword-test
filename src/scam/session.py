@@ -8,6 +8,15 @@ from typing import Dict, List, Optional
 _LEVEL_RANK = {"none": 0, "watch": 1, "warn": 2}
 _WORD = re.compile(r"[a-z0-9']+")
 _MAX_OVERLAP_WORDS = 5
+_LABEL_TEXT = {
+    "secret": "a request for a code, PIN or password",
+    "remote": "a request to install remote-access software",
+    "payment": "an urgent payment request",
+    "qr": "a QR-code or payment-approval request",
+    "giftcard": "a gift-card payment request",
+    "pressure": "pressure or impersonation",
+    "llm": "suspicious content",
+}
 
 
 def rank(level: str) -> int:
@@ -94,7 +103,5 @@ class Session:
         for a in self.alerts.values():
             if a.segment_id in recent_ids:
                 continue
-            note = a.reason or a.message
-            if note:
-                parts.append(f"{note.strip()} ({a.segment_id})")
-        return " ".join(parts[-limit:])
+            parts.append(f"{_LABEL_TEXT.get(a.label, 'a concern')} ({a.segment_id})")
+        return "; ".join(parts[-limit:])

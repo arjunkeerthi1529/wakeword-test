@@ -16,12 +16,12 @@ llm_base_url: http://localhost:8080
 led_pin: 22                # warning LED (GPIO). 0 disables. Must not be held by another process.
 mic_device: ""             # "" = system default input; with the assistant running, make that a dsnoop device
 
-chunk_target_s: 5          # past this length even a short pause cuts a chunk
-chunk_max_s: 8             # hard cut even without a pause
+chunk_target_s: 5          # past this length even a short pause cuts a chunk (only when STT is free)
+chunk_max_s: 10            # hard cut even without a pause
 overlap_s: 0.3             # audio carried into the next chunk after a hard cut
 silence_thresh: 0.012
 pause_s: 0.6               # pause that cuts a chunk shorter than chunk_target_s
 llm_cadence_s: 10          # send new speech to the LLM every 10 s (next one waits if the previous is still running)
-llm_max_tokens: 120        # JSON reply; too low truncates it and the verdict is lost
-llm_timeout_s: 120
+llm_max_tokens: 40         # reply is just {risk, evidence_id, speaker} (~25 tokens)
+llm_timeout_s: 90
 max_session_s: 1800

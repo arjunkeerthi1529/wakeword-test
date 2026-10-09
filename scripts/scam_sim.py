@@ -58,13 +58,8 @@ class SimLLM:
             m = re.match(r'\s*(s\d+) \[[\d:]+\] "(.*)"', line)
             if m and any(k in m.group(2).lower() for k in self._KEYWORDS) \
                     and not re.search(r"\b(never|won't|don't|not)\b", m.group(2).lower()):
-                return json.dumps({
-                    "risk": "warn", "evidence_id": m.group(1), "evidence": m.group(2),
-                    "speaker": "caller", "reason": "The speaker asked for sensitive information.",
-                    "advice": "Do not share it; verify through the official app.",
-                })
-        return json.dumps({"risk": "none", "evidence_id": "", "evidence": "",
-                           "speaker": "unknown", "reason": "", "advice": ""})
+                return json.dumps({"risk": "warn", "evidence_id": m.group(1), "speaker": "caller"})
+        return json.dumps({"risk": "none", "evidence_id": "", "speaker": "unknown"})
 
 
 class SimMonitor(ScamMonitor):
