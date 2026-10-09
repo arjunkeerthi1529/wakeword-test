@@ -20,6 +20,13 @@ from pathlib import Path
 
 import numpy as np
 
+# Load .env before any config is read so env vars are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass   # python-dotenv optional; env vars can be set in the shell instead
+
 from .audio.capture import AudioCapture, SILENCE_TIMEOUT
 from .audio.wake_gate import WakeGate
 from .audio.wake_word import WakeWordDetector
@@ -30,6 +37,11 @@ from .latency import LatencyTracker
 from .llm.llama_cpp_client import LlamaCppClient
 from .stt.whisper_engine import WhisperEngine
 from .tts.piper_engine import PiperEngine
+from .agent.config import get_agent_config
+from .agent import db as agent_db
+from .agent import scheduler as agent_scheduler
+from .agent.email_agent import run as email_agent_run
+from .agent.reminder_agent import ReminderAgent, parse_tag
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +56,8 @@ PAUSE_SECS       = 1.3    # silence after speech → send to LLM
 IDLE_TIMEOUT_S   = 30.0   # no speech in this window → close gate
 # Sentence boundary: punctuation followed by space or end of string
 _SENT_RE = re.compile(r'(?<=[.!?])(?:\s+|$)')
+# Machine-readable reminder tag injected by the LLM — must not reach TTS
+_REMINDER_TAG_RE = re.compile(r'\[REMINDER[^\]]*\]', re.IGNORECASE)
 
 
 def main() -> None:
@@ -91,6 +105,30 @@ def main() -> None:
     llm = LlamaCppClient(base_url=cfg.llm_base_url)
     tts = PiperEngine(model_path=cfg.piper_voice, output_device=cfg.tts_output_device,
                       aplay_device=cfg.tts_aplay_device)
+
+    # ── Agents ───────────────────────────────────────────────────────────
+    agent_cfg = get_agent_config()
+    agent_conn = agent_db.get_conn(agent_cfg.agent_db_path)
+    agent_db.init_schema(agent_conn)
+
+    reminder_agent = ReminderAgent(tts=tts, conn=agent_conn)
+    reminder_agent.recover_from_db()
+
+    agent_scheduler.start([
+        (
+            agent_cfg.email_fetch_time,
+            lambda: email_agent_run(
+                llm_base_url=cfg.llm_base_url,
+                conn=agent_conn,
+                cfg=agent_cfg,
+                tts=tts if agent_cfg.agent_read_digest else None,
+            ),
+        ),
+    ])
+    logger.info(
+        "Agents ready — email digest at %s, reminders active",
+        agent_cfg.email_fetch_time,
+    )
 
     # ── Start ─────────────────────────────────────────────────────────────
     hardware.start()
@@ -144,6 +182,11 @@ def main() -> None:
             gate.suppressed = True
             hardware.set_indicator("thinking")
             reply, stats = _stream_reply_with_tts(llm, tts, text, tracker, hardware)
+
+            # ── Reminder tag extraction ────────────────────────────────────
+            _, spec = parse_tag(reply)
+            if spec:
+                reminder_agent.schedule_from_spec(spec)
 
             # ── Latency report ────────────────────────────────────────────
             tracker.report(
@@ -301,12 +344,14 @@ def _stream_reply_with_tts(
     reply, stats = llm.chat(text, on_first_token=on_first_token, on_token=on_token)
     tracker.mark("llm_done")
 
+    # Strip machine-readable reminder tag so it is never spoken aloud
+    buffer = _REMINDER_TAG_RE.sub("", buffer).strip()
+
     # Flush any trailing text that didn't hit a sentence boundary
-    if buffer.strip():
-        sentence = buffer.strip()
-        printed_reply.append(sentence)
-        print(f"\r[Jarvis] {sentence}", flush=True)
-        tts_q.put(sentence)
+    if buffer:
+        printed_reply.append(buffer)
+        print(f"\r[Jarvis] {buffer}", flush=True)
+        tts_q.put(buffer)
 
     tts_q.put(None)   # stop TTS worker
     worker.join()     # wait for last sentence to finish playing

@@ -1,0 +1,8 @@
+# Agent dependencies — install alongside requirements.txt
+# pip install -r requirements.txt -r requirements-agents.txt
+
+# Daily job scheduler (email digest trigger)
+schedule
+
+# Load .env file automatically at startup
+python-dotenv

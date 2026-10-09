@@ -35,6 +35,7 @@ pip install --upgrade pip
 echo "=== [3/8] Python packages ==="
 pip install -r "$PROJECT_DIR/requirements.txt"
 pip install -r "$PROJECT_DIR/requirements-pi.txt"
+pip install -r "$PROJECT_DIR/requirements-agents.txt"
 
 echo "=== [4/8] Build whisper.cpp ==="
 if [ ! -d "$PI_HOME/whisper.cpp" ]; then
