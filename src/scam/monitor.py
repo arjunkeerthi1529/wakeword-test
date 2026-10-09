@@ -17,7 +17,7 @@ import numpy as np
 
 from . import rules
 from .datalog import DataLog
-from .llm_review import SYSTEM_PROMPT, ReviewResult, Snapshot, build_snapshot, validate
+from .llm_review import ReviewResult, Snapshot, build_snapshot, build_system_prompt, validate
 from .session import Alert, Session, rank, trim_overlap
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ class ScamMonitor:
         self.led = led                      # WarningLED
         self.on_event = on_event
         self.datalog = datalog or DataLog("")
+        self.system_prompt = build_system_prompt(getattr(cfg, "llm_examples", 16))
         self._seg_cut: Dict[str, float] = {}    # segment id -> monotonic time its chunk was cut
 
         self._lock = threading.RLock()
@@ -435,7 +436,7 @@ class ScamMonitor:
         t0 = time.monotonic()
         try:
             raw, timings = self.llm.review(
-                SYSTEM_PROMPT, snap.prompt,
+                self.system_prompt, snap.prompt,
                 max_tokens=self.cfg.llm_max_tokens, timeout=self.cfg.llm_timeout_s,
             )
             result = validate(raw, snap)

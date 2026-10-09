@@ -35,6 +35,9 @@ rules_enabled: false
 # Independent of the switch above: ignore an LLM warning when the line only mentions a code/PIN/
 # password inside a refusal or safety advice ("don't share your OTP with anyone").
 llm_advice_veto: true
+# Worked examples in the LLM prompt. More = more accurate on a small model but a longer prompt,
+# and prompt processing is the slow part on a Pi. Try 8 or 0 if reviews are too slow.
+llm_examples: 16
 llm_cadence_s: 10          # send new speech to the LLM every 10 s (next one waits if the previous is still running)
 llm_max_tokens: 12         # reply is one short line like "warn s4 caller" (~5 tokens)
 llm_timeout_s: 90

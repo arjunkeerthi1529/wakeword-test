@@ -27,6 +27,7 @@ class SpamGuardConfig:
     pause_s:         float = 0.9
     short_pause_s:   float = 0.5
     rules_enabled:   bool  = True
+    llm_examples:    int   = 16          # worked examples in the LLM prompt (0 = none; fewer = faster)
     llm_advice_veto: bool  = True        # ignore LLM warnings on "don't share your OTP" style lines
     llm_cadence_s:   float = 10.0
     llm_max_tokens:  int   = 12

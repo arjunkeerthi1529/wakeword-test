@@ -48,9 +48,17 @@ _EXAMPLES = [
     ("Do not tell anyone about this call or you will be arrested.", "watch s1 caller"),
 ]
 
-SYSTEM_PROMPT = _INSTRUCTIONS + "\nExamples:\n" + "\n".join(
-    f's1 "{text}" -> {reply}' for text, reply in _EXAMPLES
-)
+def build_system_prompt(n_examples: int = len(_EXAMPLES)) -> str:
+    """Instructions plus the first n worked examples (the list alternates request /
+    refusal, so an even n stays balanced). Fewer examples = a shorter prompt, which
+    matters on a Pi where prompt processing is the slow part."""
+    shots = _EXAMPLES[:max(0, n_examples)]
+    if not shots:
+        return _INSTRUCTIONS
+    return _INSTRUCTIONS + "\nExamples:\n" + "\n".join(f's1 "{t}" -> {r}' for t, r in shots)
+
+
+SYSTEM_PROMPT = build_system_prompt()
 
 _WORD = re.compile(r"[a-z0-9']+")
 _VERDICT = re.compile(r"\b(none|warn|watch)\b(?:\s+(s\d+))?(?:\s+(caller|user|unknown))?", re.IGNORECASE)
