@@ -211,8 +211,9 @@ Other results:
 1. **The first message is always a `snapshot`** of the whole current state (idle or mid-call), so a client that
    connects late or reconnects catches up immediately.
 2. After that, each message is one event below. All except `snapshot` carry `call_id`, `event_id` and `at_ms`.
-3. **Heartbeat:** send any text (e.g. `"ping"`) at least every ~15 s. If no client stays connected for 60 s
-   during a call, the Pi stops monitoring (`stopped`, `reason: "connection_lost"`).
+3. **Keep-alive:** the server uses standard WebSocket ping/pong. Sending any text (e.g. `"ping"`) every ~15 s
+   is optional, but helps your client notice a dead connection. If no client is connected for 60 s during a
+   call, the Pi stops monitoring (`stopped`, `reason: "connection_lost"`).
 4. **De-duplicate with `event_id`** (increases by 1 per event) after a reconnect.
 
 | `type` | When | Extra fields |
@@ -244,6 +245,11 @@ model later confirms or refines it (speaker, `source: "rule+llm"`), you get anot
 `segment_id` with a higher `revision`: **update the existing card, don't add a second one.** Vibrate / sound only
 when `vibrate` is `true` — a new `warn`, or a `watch` upgraded to `warn`. A result of nothing flagged is
 reported by `checked` (`outcome: "none"`), never by a `warning`.
+
+## Building a mobile app
+
+See [mobile_integration.md](mobile_integration.md) for platform setup, background behaviour, reconnect rules,
+data models and sample code for Android, iOS and React Native.
 
 ## Errors
 

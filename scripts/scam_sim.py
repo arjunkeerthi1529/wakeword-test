@@ -2,6 +2,7 @@
 
     python scripts/scam_sim.py                         # fake LLM
     python scripts/scam_sim.py --llm-url http://<pi-ip>:8080   # real LLM on the Pi
+    python scripts/scam_sim.py --host 0.0.0.0                  # reachable from a phone/emulator
 
 Open http://localhost:8765/sim — the phone page sits in a phone-sized frame,
 and the panel beside it lets you "say" lines as if heard on the call.
@@ -84,10 +85,11 @@ class SayBody(BaseModel):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to let a phone on your network reach it")
     ap.add_argument("--llm-url", default="", help="e.g. http://192.168.1.42:8080 (default: fake LLM)")
     args = ap.parse_args()
 
-    cfg = SpamGuardConfig(port=args.port, host="127.0.0.1", llm_cadence_s=6.0, llm_timeout_s=60.0)
+    cfg = SpamGuardConfig(port=args.port, host=args.host, llm_cadence_s=6.0, llm_timeout_s=60.0)
     if args.llm_url:
         from src.scam.llm import ScamLLM
         llm = ScamLLM(args.llm_url)
