@@ -15,7 +15,10 @@ _SECRET = (
     r"(?:upi |atm |m-?)?pin|password|passcode|cvv|cvc|card number|card details|"
     r"expiry date|net ?banking (?:password|id|login|details))"
 )
-_ASK = r"(?:tell|read|share|send|give|say|provide|forward|confirm|repeat|spell|type|enter|note down)"
+_ASK = (
+    r"(?:tell|read|share|send|give|say|provide|forward|confirm|repeat|spell|type|enter|note down|"
+    r"need|needs|require|requires|want|wants|ask|asks|asking for|asked for|verify)"
+)
 
 _SECRET_REQUEST = re.compile(
     rf"\b{_ASK}\b{_W}{_SECRET}\b"
@@ -52,7 +55,11 @@ _PRESSURE = re.compile(
     r"kyc (?:update|expired|pending)|lottery|prize|you (?:have )?won|"
     r"electricity (?:will be )?(?:cut|disconnected)|"
     r"don'?t tell anyone|keep (?:this|it) (?:secret|confidential)|"
-    r"calling from (?:the )?(?:\w+ )?(?:bank|head office|rbi|income tax))\b"
+    r"calling from (?:the )?(?:\w+ )?(?:bank|head office|rbi|income tax)|"
+    r"(?:police|polish|cyber ?crime|crime branch|cbi|income tax|customs|rbi|bank|telecom|trai) "
+    r"(?:department|station|officer|branch|office)|"
+    r"(?:we|i) (?:am|are|'m|'re) (?:calling )?from (?:the )?"
+    r"(?:police|polish|bank|rbi|income tax|customs|cbi|cyber|telecom|trai))\b"
 )
 
 _NEGATION = re.compile(

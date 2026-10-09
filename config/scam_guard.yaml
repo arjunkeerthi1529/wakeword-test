@@ -4,21 +4,24 @@
 host: 0.0.0.0
 port: 8000
 
-stt_model: small.en        # same accurate model the assistant uses
-stt_threads: 2             # leave CPU for llama-server; 0 = library default
-stt_beam_size: 2           # drop to 1 if the logged "STT rtf" stays above 1
+# Whisper decodes a fixed 30 s window per chunk, so the cost per chunk is roughly constant:
+# on a Pi 4, small.en takes ~10-20 s per chunk (far too slow for live), base.en ~3 s, tiny.en ~1 s.
+# Choose the most accurate model whose logged "STT rtf" stays below 1 (see scripts/stt_bench.py).
+stt_model: base.en
+stt_threads: 4             # 0 = library default
+stt_beam_size: 1
 
 llm_base_url: http://localhost:8080
 
 led_pin: 22                # warning LED (GPIO). 0 disables. Must not be held by another process.
 mic_device: ""             # "" = system default input; with the assistant running, make that a dsnoop device
 
-chunk_target_s: 4          # past this length even a short pause cuts a chunk
-chunk_max_s: 6             # hard cut even without a pause
+chunk_target_s: 5          # past this length even a short pause cuts a chunk
+chunk_max_s: 8             # hard cut even without a pause
 overlap_s: 0.3             # audio carried into the next chunk after a hard cut
 silence_thresh: 0.012
 pause_s: 0.6               # pause that cuts a chunk shorter than chunk_target_s
-llm_cadence_s: 10          # routine LLM review at most this often
+llm_cadence_s: 20          # routine LLM review at most this often, and only while STT is idle
 llm_max_tokens: 120        # JSON reply; too low truncates it and the verdict is lost
-llm_timeout_s: 60
+llm_timeout_s: 120
 max_session_s: 1800

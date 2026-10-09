@@ -1,5 +1,6 @@
 """faster-whisper wrapper owned by the scam-guard service (its own model instance)."""
 import logging
+import re
 import threading
 import time
 from typing import Optional
@@ -7,6 +8,17 @@ from typing import Optional
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+_REPEAT = re.compile(r"(\b[\w' ]{3,40}?)(?:[\s,.!?]+\1){2,}", re.IGNORECASE)
+
+
+def drop_repetition_hallucination(text: str) -> str:
+    """Whisper loops on noise ("put it back, put it back, ..."). If a phrase
+    repeated 3+ times makes up most of the text, discard it."""
+    m = _REPEAT.search(text)
+    if m and (m.end() - m.start()) > 0.6 * len(text):
+        return ""
+    return text
 
 
 class ScamSTT:
@@ -50,4 +62,5 @@ class ScamSTT:
                 no_speech_threshold=0.4,
                 condition_on_previous_text=False,
             )
-            return " ".join(s.text.strip() for s in segments).strip()
+            text = " ".join(s.text.strip() for s in segments).strip()
+        return drop_repetition_hallucination(text)

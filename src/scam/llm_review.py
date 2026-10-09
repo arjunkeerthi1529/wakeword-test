@@ -47,8 +47,8 @@ SCHEMA = {
     "additionalProperties": False,
 }
 
-_CONTEXT_CHARS = 1800
-_NEW_CHARS = 1500
+_CONTEXT_CHARS = 700    # prompt evaluation is slow on a Pi, keep prompts small
+_NEW_CHARS = 700
 _CONTEXT_WINDOW_MS = 60_000
 _NORMALIZE = re.compile(r"[^a-z0-9 ]+")
 

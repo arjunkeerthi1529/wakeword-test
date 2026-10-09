@@ -12,20 +12,20 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 class SpamGuardConfig:
     host:            str   = "0.0.0.0"
     port:            int   = 8000
-    stt_model:       str   = "small.en"
-    stt_threads:     int   = 0           # 0 = library default
-    stt_beam_size:   int   = 2
+    stt_model:       str   = "base.en"
+    stt_threads:     int   = 4           # 0 = library default
+    stt_beam_size:   int   = 1
     llm_base_url:    str   = "http://localhost:8080"
     led_pin:         int   = 22          # 0 disables the LED
     mic_device:      str   = ""          # "" = system default input
-    chunk_target_s:  float = 4.0
-    chunk_max_s:     float = 6.0
+    chunk_target_s:  float = 5.0
+    chunk_max_s:     float = 8.0
     overlap_s:       float = 0.3
     silence_thresh:  float = 0.012
     pause_s:         float = 0.6
-    llm_cadence_s:   float = 10.0
+    llm_cadence_s:   float = 20.0
     llm_max_tokens:  int   = 120
-    llm_timeout_s:   float = 60.0
+    llm_timeout_s:   float = 120.0
     max_session_s:   float = 1800.0
 
 
