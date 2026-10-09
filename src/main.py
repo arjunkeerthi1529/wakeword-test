@@ -20,6 +20,13 @@ from pathlib import Path
 
 import numpy as np
 
+# Load .env before any config is read so env vars are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass   # python-dotenv optional; env vars can be set in the shell instead
+
 from .audio.capture import AudioCapture, SILENCE_TIMEOUT
 from .audio.wake_gate import WakeGate
 from .audio.wake_word import WakeWordDetector
@@ -30,6 +37,8 @@ from .latency import LatencyTracker
 from .llm.llama_cpp_client import LlamaCppClient
 from .stt.whisper_engine import WhisperEngine
 from .tts.piper_engine import PiperEngine
+from .work.config import get_agent_config
+from .work.reminder_agent import parse_tag
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +53,8 @@ PAUSE_SECS       = 1.3    # silence after speech → send to LLM
 IDLE_TIMEOUT_S   = 30.0   # no speech in this window → close gate
 # Sentence boundary: punctuation followed by space or end of string
 _SENT_RE = re.compile(r'(?<=[.!?])(?:\s+|$)')
+# Machine-readable reminder tag injected by the LLM — must not reach TTS
+_REMINDER_TAG_RE = re.compile(r'\[REMINDER[^\]]*\]', re.IGNORECASE)
 
 
 def main() -> None:
@@ -91,6 +102,12 @@ def main() -> None:
     llm = LlamaCppClient(base_url=cfg.llm_base_url)
     tts = PiperEngine(model_path=cfg.piper_voice, output_device=cfg.tts_output_device,
                       aplay_device=cfg.tts_aplay_device)
+
+    # ── Agent service link ────────────────────────────────────────────────
+    # Reminders and email digest run in a separate process (python -m src.work).
+    # This service only forwards reminder intents via HTTP POST /remind.
+    agent_service_url = get_agent_config().agent_service_url
+    logger.info("Work service URL: %s  (start with: python -m src.work)", agent_service_url)
 
     # ── Start ─────────────────────────────────────────────────────────────
     hardware.start()
@@ -145,6 +162,11 @@ def main() -> None:
             hardware.set_indicator("thinking")
             reply, stats = _stream_reply_with_tts(llm, tts, text, tracker, hardware)
 
+            # ── Forward reminder intent to agent service ───────────────────
+            _, spec = parse_tag(reply)
+            if spec:
+                _forward_reminder(spec, agent_service_url)
+
             # ── Latency report ────────────────────────────────────────────
             tracker.report(
                 tok_per_s=stats.get("tok_per_s", 0.0),
@@ -161,6 +183,25 @@ def main() -> None:
             _flush(audio, gate, ECHO_FLUSH_S)
             gate.suppressed = False
             gate.reopen()   # ensure gate is open for follow-up even if timeout fired
+
+
+# ── Agent service forwarder ───────────────────────────────────────────────────
+
+def _forward_reminder(spec: dict, agent_service_url: str) -> None:
+    """POST a reminder spec to the agent service. Fire-and-forget with timeout.
+    If the agent service is not running the reminder is logged and dropped."""
+    payload: dict = {"message": spec["message"]}
+    if "delay_s" in spec:
+        payload["delay_s"] = spec["delay_s"]
+    else:
+        payload["fires_at"] = spec["fires_at"].isoformat()
+    try:
+        import requests as _req
+        _req.post(f"{agent_service_url}/remind", json=payload, timeout=3)
+        logger.info("Reminder forwarded to agent service: %r", spec["message"])
+    except Exception as exc:
+        logger.warning("Agent service unreachable — reminder lost (%s). "
+                       "Start it with: python -m src.work", exc)
 
 
 # ── Streaming listen ──────────────────────────────────────────────────────────
@@ -301,12 +342,14 @@ def _stream_reply_with_tts(
     reply, stats = llm.chat(text, on_first_token=on_first_token, on_token=on_token)
     tracker.mark("llm_done")
 
+    # Strip machine-readable reminder tag so it is never spoken aloud
+    buffer = _REMINDER_TAG_RE.sub("", buffer).strip()
+
     # Flush any trailing text that didn't hit a sentence boundary
-    if buffer.strip():
-        sentence = buffer.strip()
-        printed_reply.append(sentence)
-        print(f"\r[Jarvis] {sentence}", flush=True)
-        tts_q.put(sentence)
+    if buffer:
+        printed_reply.append(buffer)
+        print(f"\r[Jarvis] {buffer}", flush=True)
+        tts_q.put(buffer)
 
     tts_q.put(None)   # stop TTS worker
     worker.join()     # wait for last sentence to finish playing

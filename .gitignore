@@ -5,6 +5,7 @@ models/piper/*.onnx.json
 models/.gitkeep
 latency_log.csv
 logs/
+data/
 __pycache__/
 *.pyc
 *.pyo
