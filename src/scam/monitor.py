@@ -15,6 +15,7 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 
 from . import rules
+from .datalog import DataLog
 from .llm_review import SCHEMA, SYSTEM_PROMPT, ReviewResult, Snapshot, build_snapshot, validate
 from .session import Alert, Session, rank
 
@@ -42,13 +43,16 @@ _LLM_MESSAGES = {
 
 
 class ScamMonitor:
-    def __init__(self, cfg, mic, stt, llm, led, on_event: Callable[[dict], None]):
+    def __init__(self, cfg, mic, stt, llm, led, on_event: Callable[[dict], None],
+                 datalog: Optional[DataLog] = None):
         self.cfg = cfg                      # SpamGuardConfig
         self.mic = mic                      # MicSource: start() -> Queue, stop()
         self.stt = stt                      # ScamSTT
         self.llm = llm                      # ScamLLM
         self.led = led                      # WarningLED
         self.on_event = on_event
+        self.datalog = datalog or DataLog("")
+        self._seg_cut: Dict[str, float] = {}    # segment id -> monotonic time its chunk was cut
 
         self._lock = threading.RLock()
         self._session: Optional[Session] = None
@@ -85,6 +89,15 @@ class ScamMonitor:
             self._llm_failing = False
             self._audio_gap = False
             self._last_block_t = time.monotonic()
+            self._seg_cut = {}
+            self.datalog.write(
+                "call_start", session.call_id,
+                stt_model=getattr(self.cfg, "stt_model", ""), stt_threads=self.cfg.stt_threads,
+                stt_beam_size=self.cfg.stt_beam_size, chunk_target_s=self.cfg.chunk_target_s,
+                chunk_max_s=self.cfg.chunk_max_s, pause_s=self.cfg.pause_s,
+                silence_thresh=self.cfg.silence_thresh, llm_cadence_s=self.cfg.llm_cadence_s,
+                llm_max_tokens=self.cfg.llm_max_tokens, llm_url=getattr(self.cfg, "llm_base_url", ""),
+            )
 
             for name, target, args in (
                 ("scam-segmenter", self._segment_loop, (session, stop_evt, listener, chunks)),
@@ -109,6 +122,8 @@ class ScamMonitor:
             alerts = len(session.alerts)
             segments = len(session.segments)
             self._emit("stopped", session=session, reason=reason, message="Monitoring stopped")
+            self.datalog.write("call_end", session.call_id, reason=reason, segments=segments,
+                               alerts=alerts, duration_s=round(time.monotonic() - session.started_at, 1))
         self.led.set("off")
         logger.info("Scam monitoring stopped (%s) — %d segments, %d alerts", reason, segments, alerts)
 
@@ -134,6 +149,8 @@ class ScamMonitor:
     def _emit(self, type_: str, session: Optional[Session] = None, **fields) -> None:
         with self._lock:
             s = session or self._session
+            if type_ == "error":
+                self.datalog.write("error", s.call_id if s else "", **fields)
             self._event_id += 1
             event = {
                 "call_id": s.call_id if s else "",
@@ -175,7 +192,7 @@ class ScamMonitor:
 
         def emit_chunk(end_s: float) -> None:
             audio = np.concatenate(buf).astype(np.float32)
-            chunks.put((audio, int(chunk_start_s * 1000), int(end_s * 1000)))
+            chunks.put((audio, int(chunk_start_s * 1000), int(end_s * 1000), time.monotonic()))
 
         while not stop_evt.is_set():
             try:
@@ -231,7 +248,7 @@ class ScamMonitor:
     def _stt_loop(self, session, stop_evt, chunks) -> None:
         while not stop_evt.is_set():
             try:
-                audio, start_ms, end_ms = chunks.get(timeout=1.0)
+                audio, start_ms, end_ms, cut_mono = chunks.get(timeout=1.0)
             except queue.Empty:
                 self._maybe_dispatch_llm(session)    # lets the routine cadence fire during quiet spells
                 continue
@@ -243,8 +260,9 @@ class ScamMonitor:
                 text = self.stt.transcribe(
                     audio, beam_size=self.cfg.stt_beam_size, initial_prompt=SCAM_STT_PROMPT,
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("STT failed on a chunk")
+                self.datalog.write("stt_error", session.call_id, error=str(exc))
                 self._emit("error", session=session, code="stt_failed",
                            message="May have missed speech.")
                 continue
@@ -254,25 +272,43 @@ class ScamMonitor:
             audio_s = len(audio) / SAMPLE_RATE
             logger.info("STT rtf=%.2f (%.1fs audio in %.1fs, backlog=%d)",
                         elapsed / audio_s, audio_s, elapsed, backlog)
-            logger.debug("STT text: %r", text)
+            self.datalog.write(
+                "stt", session.call_id, start_ms=start_ms, end_ms=end_ms,
+                audio_s=round(audio_s, 2), stt_s=round(elapsed, 2), rtf=round(elapsed / audio_s, 2),
+                queue_wait_s=round(t0 - cut_mono, 2), backlog=backlog, text=text,
+            )
 
             if stop_evt.is_set():
                 return
-            self._commit(session, text, start_ms, end_ms)
+            self._commit(session, text, start_ms, end_ms, cut_mono)
 
-    def _commit(self, session: Session, text: str, start_ms: int, end_ms: int) -> None:
+    def _commit(self, session: Session, text: str, start_ms: int, end_ms: int,
+                cut_mono: float) -> None:
         with self._lock:
             if self._session is not session:
                 return
             seg = session.add_segment(text, start_ms, end_ms)
             if seg is None:
+                if text.strip():
+                    self.datalog.write("segment_dropped", session.call_id, text=text,
+                                       reason="duplicate of previous segment (chunk overlap)")
                 return
             prev = session.previous_text()
+            self._seg_cut[seg.id] = cut_mono
+            logger.info("SEGMENT %s: %s", seg.id, seg.text)
+            self.datalog.write(
+                "segment", session.call_id, segment_id=seg.id, start_ms=seg.start_ms,
+                end_ms=seg.end_ms, text=seg.text,
+                since_cut_s=round(time.monotonic() - cut_mono, 2),
+            )
             self._emit("transcript", session=session, segment_id=seg.id,
                        start_ms=seg.start_ms, end_ms=seg.end_ms, text=seg.text)
 
         result = rules.evaluate(seg.text, seg.id, prev)
+        self.datalog.write("rule", session.call_id, segment_id=seg.id, level=result.level,
+                           label=result.label, evidence=result.evidence)
         if result.level != "none":
+            logger.info("RULE %s: %s/%s — %r", seg.id, result.level, result.label, result.evidence)
             self._raise(
                 session, level=result.level, label=result.label, evidence=result.evidence,
                 segment_id=seg.id, message=result.message or _DEFAULT_PRESSURE_MESSAGE,
@@ -315,6 +351,12 @@ class ScamMonitor:
 
             overall = session.max_level()
             self._emit("warning", session=session, vibrate=vibrate, **self._alert_fields(alert))
+            cut = self._seg_cut.get(segment_id)
+            since_cut = round(time.monotonic() - cut, 2) if cut else None
+            logger.info("ALERT %s %s via %s rev%d%s", segment_id, alert.level, alert.source,
+                        alert.revision, f" ({since_cut:.1f}s after chunk cut)" if since_cut is not None else "")
+            self.datalog.write("alert", session.call_id, vibrate=vibrate, since_cut_s=since_cut,
+                               **self._alert_fields(alert))
         self.led.set(overall)
 
     # ── LLM review scheduling (one request in flight) ─────────────────────
@@ -341,6 +383,7 @@ class ScamMonitor:
     def _run_review(self, session: Session, snap: Snapshot) -> None:
         result: Optional[ReviewResult] = None
         transport_error: Optional[Exception] = None
+        raw: Optional[str] = None
         t0 = time.monotonic()
         try:
             raw = self.llm.complete_json(
@@ -349,9 +392,17 @@ class ScamMonitor:
             )
             result = validate(raw, snap)
             logger.info("LLM review took %.1fs → %s", time.monotonic() - t0,
-                        result.risk if result else "invalid reply")
+                        (f"{result.risk} {result.segment_id} {result.speaker}".strip()
+                         if result else "invalid reply"))
         except Exception as exc:
             transport_error = exc
+        self.datalog.write(
+            "llm", snap.call_id, duration_s=round(time.monotonic() - t0, 2),
+            segments=[s.id for s in snap.new_segments], prompt=snap.prompt, raw=raw,
+            verdict=({"risk": result.risk, "segment_id": result.segment_id, "speaker": result.speaker}
+                     if result else None),
+            error=str(transport_error) if transport_error else None,
+        )
 
         with self._lock:
             if self._session is not session or snap.call_id != session.call_id:

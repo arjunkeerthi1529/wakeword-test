@@ -16,6 +16,10 @@ llm_base_url: http://localhost:8080
 led_pin: 22                # warning LED (GPIO). 0 disables. Must not be held by another process.
 mic_device: ""             # "" = system default input; with the assistant running, make that a dsnoop device
 
+# JSON-lines record of transcripts, rule results, LLM prompts/replies and timings, for testing.
+# Stores what was said (text), never audio. Set to "" to disable. Summarise with scripts/scam_log_report.py.
+analysis_log: logs/scam_events.jsonl
+
 chunk_target_s: 5          # past this length even a short pause cuts a chunk (only when STT is free)
 chunk_max_s: 10            # hard cut even without a pause
 overlap_s: 0.3             # audio carried into the next chunk after a hard cut

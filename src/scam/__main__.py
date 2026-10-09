@@ -7,8 +7,10 @@ Independent of the voice assistant: its own process, models, config
 call is being monitored.
 """
 import logging
+from pathlib import Path
 
-from .config import load_config
+from .config import ROOT_DIR, load_config
+from .datalog import DataLog
 from .led import WarningLED
 from .llm import ScamLLM
 from .mic import MicSource
@@ -29,15 +31,23 @@ def main() -> None:
 
     stt = ScamSTT(cfg.stt_model, cfg.stt_threads)
     stt.warmup()
+    log_path = ""
+    if cfg.analysis_log:
+        p = Path(cfg.analysis_log)
+        log_path = str(p if p.is_absolute() else ROOT_DIR / p)
+        logger.info("Analysis log (transcripts, not audio): %s", log_path)
+    datalog = DataLog(log_path)
+
     server = ScamServer(cfg)
     server.monitor = ScamMonitor(
         cfg, MicSource(cfg.mic_device), stt, ScamLLM(cfg.llm_base_url),
-        WarningLED(cfg.led_pin), on_event=server.publish,
+        WarningLED(cfg.led_pin), on_event=server.publish, datalog=datalog,
     )
     try:
         server.run()
     finally:
         server.monitor.stop("service_exit")
+        datalog.close()
 
 
 if __name__ == "__main__":

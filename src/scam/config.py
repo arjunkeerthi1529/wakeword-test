@@ -18,6 +18,7 @@ class SpamGuardConfig:
     llm_base_url:    str   = "http://localhost:8080"
     led_pin:         int   = 22          # 0 disables the LED
     mic_device:      str   = ""          # "" = system default input
+    analysis_log:    str   = "logs/scam_events.jsonl"    # "" disables; transcripts only, never audio
     chunk_target_s:  float = 5.0
     chunk_max_s:     float = 10.0
     overlap_s:       float = 0.3
