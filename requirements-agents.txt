@@ -6,3 +6,7 @@ schedule
 
 # Load .env file automatically at startup
 python-dotenv
+
+# Agent service HTTP server (python -m src.agent)
+fastapi
+uvicorn[standard]

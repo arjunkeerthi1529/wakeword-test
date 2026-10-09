@@ -38,10 +38,7 @@ from .llm.llama_cpp_client import LlamaCppClient
 from .stt.whisper_engine import WhisperEngine
 from .tts.piper_engine import PiperEngine
 from .agent.config import get_agent_config
-from .agent import db as agent_db
-from .agent import scheduler as agent_scheduler
-from .agent.email_agent import run as email_agent_run
-from .agent.reminder_agent import ReminderAgent, parse_tag
+from .agent.reminder_agent import parse_tag
 
 logging.basicConfig(
     level=logging.INFO,
@@ -106,29 +103,11 @@ def main() -> None:
     tts = PiperEngine(model_path=cfg.piper_voice, output_device=cfg.tts_output_device,
                       aplay_device=cfg.tts_aplay_device)
 
-    # ── Agents ───────────────────────────────────────────────────────────
-    agent_cfg = get_agent_config()
-    agent_conn = agent_db.get_conn(agent_cfg.agent_db_path)
-    agent_db.init_schema(agent_conn)
-
-    reminder_agent = ReminderAgent(tts=tts, conn=agent_conn)
-    reminder_agent.recover_from_db()
-
-    agent_scheduler.start([
-        (
-            agent_cfg.email_fetch_time,
-            lambda: email_agent_run(
-                llm_base_url=cfg.llm_base_url,
-                conn=agent_conn,
-                cfg=agent_cfg,
-                tts=tts if agent_cfg.agent_read_digest else None,
-            ),
-        ),
-    ])
-    logger.info(
-        "Agents ready — email digest at %s, reminders active",
-        agent_cfg.email_fetch_time,
-    )
+    # ── Agent service link ────────────────────────────────────────────────
+    # Reminders and email digest run in a separate process (python -m src.agent).
+    # This service only forwards reminder intents via HTTP POST /remind.
+    agent_service_url = get_agent_config().agent_service_url
+    logger.info("Agent service URL: %s  (start with: python -m src.agent)", agent_service_url)
 
     # ── Start ─────────────────────────────────────────────────────────────
     hardware.start()
@@ -183,10 +162,10 @@ def main() -> None:
             hardware.set_indicator("thinking")
             reply, stats = _stream_reply_with_tts(llm, tts, text, tracker, hardware)
 
-            # ── Reminder tag extraction ────────────────────────────────────
+            # ── Forward reminder intent to agent service ───────────────────
             _, spec = parse_tag(reply)
             if spec:
-                reminder_agent.schedule_from_spec(spec)
+                _forward_reminder(spec, agent_service_url)
 
             # ── Latency report ────────────────────────────────────────────
             tracker.report(
@@ -204,6 +183,25 @@ def main() -> None:
             _flush(audio, gate, ECHO_FLUSH_S)
             gate.suppressed = False
             gate.reopen()   # ensure gate is open for follow-up even if timeout fired
+
+
+# ── Agent service forwarder ───────────────────────────────────────────────────
+
+def _forward_reminder(spec: dict, agent_service_url: str) -> None:
+    """POST a reminder spec to the agent service. Fire-and-forget with timeout.
+    If the agent service is not running the reminder is logged and dropped."""
+    payload: dict = {"message": spec["message"]}
+    if "delay_s" in spec:
+        payload["delay_s"] = spec["delay_s"]
+    else:
+        payload["fires_at"] = spec["fires_at"].isoformat()
+    try:
+        import requests as _req
+        _req.post(f"{agent_service_url}/remind", json=payload, timeout=3)
+        logger.info("Reminder forwarded to agent service: %r", spec["message"])
+    except Exception as exc:
+        logger.warning("Agent service unreachable — reminder lost (%s). "
+                       "Start it with: python -m src.agent", exc)
 
 
 # ── Streaming listen ──────────────────────────────────────────────────────────

@@ -11,10 +11,16 @@ class AgentConfig:
     # Database
     agent_db_path: str       # SQLite file path, created on first run
 
+    # Inter-service communication
+    agent_service_url: str   # URL the voice assistant uses to reach this service
+    agent_port: int          # port this service listens on
+
 
 def get_agent_config() -> "AgentConfig":
     return AgentConfig(
         email_fetch_time=os.getenv("EMAIL_FETCH_TIME", "08:00"),
         agent_read_digest=os.getenv("AGENT_READ_DIGEST", "false").lower() == "true",
         agent_db_path=os.getenv("AGENT_DB_PATH", "data/agent.db"),
+        agent_service_url=os.getenv("AGENT_SERVICE_URL", "http://localhost:8001"),
+        agent_port=int(os.getenv("AGENT_PORT", "8001")),
     )
