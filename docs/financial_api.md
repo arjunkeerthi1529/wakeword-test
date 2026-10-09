@@ -14,6 +14,11 @@ Raspberry Pi.
 
 Start the service: `python -m src.financial`
 
+**Reference implementation:** `finprofile.html` (repo root's sibling project) is a complete, working
+frontend wired against this exact API — every endpoint below is something it actually calls. When in
+doubt about a response shape, that file's `api()` calls and render functions are the verified ground
+truth; this doc was corrected against it.
+
 ---
 
 ## Design principles the UI must respect
@@ -671,7 +676,7 @@ structured fields (`gross_expense_paise`, `breakdown`, `items`, etc.) are also a
 | `average_spending` | "average daily/monthly spend" | `average_paise`, `average_unit` (`"daily"` or `"monthly"`) |
 | `compare_periods` | "compare with last month", "more or less" | `current_period`, `previous_period` (each with spending totals), `delta_net_paise` |
 | `budget_remaining` | "how much left", "remaining budget" | `budget_paise`, `spent_paise`, `left_paise`, `per_day_paise`, `days_left` |
-| `emi_info` | "how much do I pay in EMIs", "loan details" | `loans[]`, `total_emi_paise`, `total_remaining_paise` |
+| `emi_info` | "how much do I pay in EMIs", "loan details" | `loans[]` (`{name,lender,kind,emi_paise,paid,total,remaining_paise}` — note `paid`/`total`, unlike `GET /loans`'s `paid_installments`/`months`), `total_emi_paise`, `total_remaining_paise` |
 | `recurring_info` | "recurring payments", "what do I pay every month" | `recurring[]`, `recurring_total_paise`, `emi_total_paise`, `grand_total_paise` |
 | `hypothetical_spend` | "if I spend X on Y, will I go over budget" | `hypothetical_paise`, `budget_paise`, `current_spent_paise`, `after_paise`, `over_budget`, `over_by_paise` |
 | `list_transactions` | "show me my food expenses", "list my purchases" | `items[]` — `Transaction` objects, `total_count` |
@@ -968,7 +973,7 @@ recurring if it appears once per month in at least 2 of the 3 months with ≤15%
     "category_id": "subscriptions",
     "amount_paise": 64900,
     "typical_day": 15,
-    "occurrences": 3
+    "months_present": 3
   }
 ]
 ```
@@ -980,7 +985,7 @@ recurring if it appears once per month in at least 2 of the 3 months with ≤15%
 | `category_id` | string | most common category |
 | `amount_paise` | int | median amount across occurrences |
 | `typical_day` | int | most common day of month |
-| `occurrences` | int | how many months this merchant appeared in |
+| `months_present` | int | how many of the last 3 full months this merchant appeared in |
 
 ---
 
@@ -996,24 +1001,29 @@ Projects current month spending to end of month based on daily run rate.
 
 ```json
 {
-  "month": "2026-10",
+  "ok": true,
+  "category_id": null,
+  "actual_paise": 1461700,
+  "projected_paise": 4531270,
   "elapsed_days": 10,
-  "total_days": 31,
-  "actual_paise": 850000,
-  "projected_paise": 2635000,
-  "daily_average_paise": 85000,
-  "budget_paise": 3000000,
+  "days_in_month": 31,
+  "budget_paise": null,
   "over_budget": false,
-  "over_by_paise": 0,
+  "expense_count": 19,
   "daily_spending": [
-    {"date": "2026-10-01", "amount_paise": 95000},
-    {"date": "2026-10-02", "amount_paise": 72000}
-  ]
+    {"posted_date": "2026-10-01", "total_paise": 460000, "count": 6},
+    {"posted_date": "2026-10-03", "total_paise": 116900, "count": 2}
+  ],
+  "calculation": "₹14,617 ÷ 10 days × 31 days = ₹45,312.70"
 }
 ```
 
-`budget_paise` is `null` if no budget is set for the requested category (or no budgets at all for overall).
-`daily_spending` lists actual spend per day in the current month so far.
+`budget_paise` is `null` if no budget is set for the requested category (or, when `category_id` is
+omitted, if there are no budgets at all). `daily_spending[]` uses `posted_date` + `total_paise` (not
+`date`/`amount_paise`). `calculation` is a ready-to-display string — use it directly instead of
+reformatting the raw numbers. `over_by_paise` does **not** exist; compute it yourself as
+`projected_paise - budget_paise` when `over_budget` is true. When `elapsed_days < 1` the response is
+`{"ok": false, "reason": "No days elapsed this month yet."}` instead of the shape above.
 
 ---
 
@@ -1026,44 +1036,66 @@ Returns smart, actionable nudges based on current financial state.
 ```json
 [
   {
-    "type": "budget_warning",
-    "severity": "warning",
-    "message": "Food & Dining is at 85% of budget with 21 days left.",
+    "id": "budget-food_dining",
+    "tone": "warn",
+    "title": "food_dining: 88% of budget used",
+    "body": "₹6,999.99 of ₹8,000 spent, with 22 days left.",
     "category_id": "food_dining",
-    "detail": {"usage_percent": "85.0", "budget_paise": 1000000, "spent_paise": 850000}
+    "kind": "budget_usage"
   },
   {
-    "type": "forecast_over_budget",
-    "severity": "alert",
-    "message": "At this pace, transport will exceed budget by ₹2,500.",
-    "category_id": "transport",
-    "detail": {"projected_paise": 450000, "budget_paise": 200000}
-  },
-  {
-    "type": "spending_spike",
-    "severity": "info",
-    "message": "Shopping is up 45% vs last month (₹3,200 more).",
+    "id": "forecast-shopping",
+    "tone": "warn",
+    "title": "shopping may go over budget",
+    "body": "At this pace you'd reach about ₹8,060 by end of month, around ₹2,060 above your ₹6,000 limit.",
     "category_id": "shopping",
-    "detail": {"change_percent": "45.0", "delta_paise": 320000}
+    "kind": "forecast_over"
   },
   {
-    "type": "goal_nudge",
-    "severity": "info",
-    "message": "Emergency Fund is 30% there — ₹7,000/month needed to hit your target.",
+    "id": "compare-food",
+    "tone": "warn",
+    "title": "Food spending is ₹5,500 higher than this time last month",
+    "body": "₹9,000 so far vs ₹3,500 for the same days of last month.",
+    "category_ids": ["food_dining", "groceries"],
+    "kind": "month_comparison"
+  },
+  {
+    "id": "goal-goal-abc123",
+    "tone": "warn",
+    "title": "Emergency Fund is a little behind",
+    "body": "₹15,000 saved so far. About ₹14,166.66/month would reach ₹100,000 by the due date.",
     "goal_id": "goal-abc123",
-    "detail": {"progress_percent": "30.0", "need_per_month_paise": 700000}
+    "kind": "goal_behind"
+  },
+  {
+    "id": "goal-ok-goal-xyz789",
+    "tone": "good",
+    "title": "New Laptop is on track",
+    "body": "₹22,000 of ₹60,000 saved.",
+    "goal_id": "goal-xyz789",
+    "kind": "goal_on_track"
   }
 ]
 ```
 
-**Advice types:**
+Each item is `{id, tone, title, body, kind, category_id?, category_ids?, goal_id?}` — display `title` as
+a heading and `body` as the supporting line. There is no `type`/`severity`/`message`/`detail` shape.
 
-| Type | Trigger | Severity |
+| `tone` | Meaning | UI treatment |
 |---|---|---|
-| `budget_warning` | Any category at ≥75% of budget | `warning` |
-| `forecast_over_budget` | Projected spend exceeds budget | `alert` |
-| `spending_spike` | Category up ≥25% AND ≥₹500 vs last month | `info` |
-| `goal_nudge` | Active goal not on track | `info` |
+| `good` | positive — e.g. a goal on track | `.advice.good` (sage accent) |
+| `warn` | needs attention | default `.advice` (marigold accent) |
+| `bad` | not currently emitted by any rule below, but a valid tone value | `.advice.bad` (coral accent) |
+
+**Advice `kind` values:**
+
+| Kind | Trigger | Tone |
+|---|---|---|
+| `budget_usage` | Any budgeted category at ≥75% used this month | `warn` (always — `bad` is reserved but unused) |
+| `forecast_over` | Projected month-end spend exceeds that category's budget (skipped if `budget_usage` already fired for it) | `warn` |
+| `month_comparison` | Food (food_dining+groceries), Transport, or Entertainment up ≥25% AND ≥₹500 vs. the same elapsed days last month | `warn` |
+| `goal_behind` | An active goal's saved amount is below ~95% of its expected pace | `warn` |
+| `goal_on_track` | An active goal is on pace and has some progress | `good` |
 
 ---
 
