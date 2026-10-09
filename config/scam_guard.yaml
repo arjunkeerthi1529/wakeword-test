@@ -21,7 +21,7 @@ chunk_max_s: 8             # hard cut even without a pause
 overlap_s: 0.3             # audio carried into the next chunk after a hard cut
 silence_thresh: 0.012
 pause_s: 0.6               # pause that cuts a chunk shorter than chunk_target_s
-llm_cadence_s: 20          # routine LLM review at most this often, and only while STT is idle
+llm_cadence_s: 10          # send new speech to the LLM every 10 s (next one waits if the previous is still running)
 llm_max_tokens: 120        # JSON reply; too low truncates it and the verdict is lost
 llm_timeout_s: 120
 max_session_s: 1800

@@ -54,8 +54,6 @@ class ScamMonitor:
         self._llm_failing = False
         self._audio_gap = False
         self._last_block_t = 0.0
-        self._stt_busy = False
-        self._chunks: Optional[queue.Queue] = None
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -74,8 +72,6 @@ class ScamMonitor:
             session = Session()
             stop_evt = threading.Event()
             chunks: "queue.Queue" = queue.Queue()
-            self._chunks = chunks
-            self._stt_busy = False
 
             self._session = session
             self._stop_evt = stop_evt
@@ -230,7 +226,6 @@ class ScamMonitor:
 
             backlog = chunks.qsize()
             t0 = time.monotonic()
-            self._stt_busy = True
             try:
                 text = self.stt.transcribe(
                     audio, beam_size=self.cfg.stt_beam_size, initial_prompt=SCAM_STT_PROMPT,
@@ -240,8 +235,6 @@ class ScamMonitor:
                 self._emit("error", session=session, code="stt_failed",
                            message="May have missed speech.")
                 continue
-            finally:
-                self._stt_busy = False
             elapsed = time.monotonic() - t0
             audio_s = len(audio) / SAMPLE_RATE
             logger.info("STT rtf=%.2f (%.1fs audio in %.1fs, backlog=%d)",
@@ -316,10 +309,6 @@ class ScamMonitor:
             if self._session is not session or session.llm_busy:
                 return
             if not session.unreviewed():
-                return
-            # STT and the instant rules are what protect the user; the LLM only
-            # borrows CPU while nothing is waiting to be transcribed.
-            if self._stt_busy or (self._chunks is not None and not self._chunks.empty()):
                 return
             now = time.monotonic()
             if not self._review_soon and now - session.last_dispatch < self.cfg.llm_cadence_s:

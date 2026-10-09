@@ -23,7 +23,7 @@ class SpamGuardConfig:
     overlap_s:       float = 0.3
     silence_thresh:  float = 0.012
     pause_s:         float = 0.6
-    llm_cadence_s:   float = 20.0
+    llm_cadence_s:   float = 10.0
     llm_max_tokens:  int   = 120
     llm_timeout_s:   float = 120.0
     max_session_s:   float = 1800.0
