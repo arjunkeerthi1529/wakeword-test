@@ -15,6 +15,10 @@ llm_base_url: http://localhost:8080
 # Download: bash scripts/download_models.sh
 piper_voice: models/piper/en_US-lessac-low.onnx
 
+# Where speech comes out: a sounddevice output index or part of its name (e.g. "Jabra").
+# Empty = system default. If replies are silent, run: python scripts/audio_check.py
+tts_output_device: ""
+
 wake_word:
   model: hey_jarvis
   threshold: 0.35

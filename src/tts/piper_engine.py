@@ -28,7 +28,11 @@ class PiperEngine:
         speak(text)                              # convenience: synthesize + play
     """
 
-    def __init__(self, model_path: str):
+    def __init__(self, model_path: str, output_device=None):
+        """output_device: sounddevice output (index, or part of the name). None/"" = system default."""
+        self._device = self._parse_device(output_device)
+        self._out_channels = 1
+        self._log_output_device()
         json_path = model_path + ".json"
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -48,6 +52,25 @@ class PiperEngine:
         for phrase in _WARMUP_PHRASES:
             self._cache[phrase] = self._do_synthesize(phrase)
         logger.info("Piper ready — greeting will play instantly on wake")
+
+    @staticmethod
+    def _parse_device(device):
+        if device is None or str(device).strip() == "":
+            return None
+        text = str(device).strip()
+        return int(text) if text.isdigit() else text
+
+    def _log_output_device(self) -> None:
+        """Say where speech will come out, so a silent TTS is diagnosable from the log."""
+        try:
+            info = sd.query_devices(self._device, "output")
+            self._out_channels = int(info["max_output_channels"])
+            logger.info("TTS output device: [%s] %s (%d ch)%s", info.get("index", "?"), info["name"],
+                        self._out_channels, "" if self._device is not None else "  <- system default")
+        except Exception as exc:
+            logger.warning("Could not query TTS output device %r (%s) — using sounddevice's default",
+                           self._device, exc)
+            self._device = None
 
     def _do_synthesize(self, text: str) -> Tuple[np.ndarray, int]:
         buf = io.BytesIO()
@@ -70,7 +93,9 @@ class PiperEngine:
 
     def play(self, audio: np.ndarray, samplerate: int) -> None:
         """Play pre-synthesized audio and block until playback completes."""
-        sd.play(audio, samplerate=samplerate)
+        if self._device is not None and self._out_channels >= 2 and audio.ndim == 1:
+            audio = np.column_stack([audio, audio])      # direct hw devices (e.g. USB headsets) need stereo
+        sd.play(audio, samplerate=samplerate, device=self._device)
         sd.wait()
 
     def speak(self, text: str) -> None:
