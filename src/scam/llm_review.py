@@ -27,8 +27,13 @@ where the last word is who most likely said it ("unknown" if unclear). Example: 
 
 _VERDICT = re.compile(r"\b(none|warn|watch)\b(?:\s+(s\d+))?(?:\s+(caller|user|unknown))?", re.IGNORECASE)
 
-_CONTEXT_CHARS = 500    # prompt evaluation is slow on a Pi, keep prompts small
-_NEW_CHARS = 600
+# Prompt evaluation is slow on a Pi: prompt length maps directly to review time.
+_CONTEXT_CHARS = 300
+_NEW_CHARS = 450
+
+# Sent once at startup: verifies the model follows the enforced format and loads
+# SYSTEM_PROMPT into the server's prompt cache so the first real review is fast.
+SELF_TEST_PROMPT = 'Context:\n(none)\nNEW segments:\ns1 [00:00] "Please read the code to me."'
 _CONTEXT_WINDOW_MS = 60_000
 
 

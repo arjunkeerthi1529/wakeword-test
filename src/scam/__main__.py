@@ -7,12 +7,14 @@ Independent of the voice assistant: its own process, models, config
 call is being monitored.
 """
 import logging
+import time
 from pathlib import Path
 
 from .config import ROOT_DIR, load_config
 from .datalog import DataLog
 from .led import WarningLED
 from .llm import ScamLLM
+from .llm_review import SELF_TEST_PROMPT, SYSTEM_PROMPT
 from .mic import MicSource
 from .monitor import ScamMonitor
 from .server import ScamServer
@@ -23,6 +25,21 @@ logging.basicConfig(
     format="%(asctime)s %(name)-22s %(levelname)-8s %(message)s",
 )
 logger = logging.getLogger("scam")
+
+
+def check_llm(llm: ScamLLM, cfg) -> None:
+    """One real review at startup: confirms the server follows the enforced reply
+    format and loads the system prompt into its cache so the first live review is fast."""
+    try:
+        t0 = time.monotonic()
+        text, info = llm.review(SYSTEM_PROMPT, SELF_TEST_PROMPT, cfg.llm_max_tokens, cfg.llm_timeout_s)
+        logger.info("LLM check OK in %.1fs: reply=%r mode=%s prompt=%s tok/%.1fs decode=%s tok/%.1fs",
+                    time.monotonic() - t0, text.strip(), info.get("mode"),
+                    info.get("prompt_n"), info.get("prompt_ms", 0) / 1000,
+                    info.get("predicted_n"), info.get("predicted_ms", 0) / 1000)
+    except Exception as exc:
+        logger.warning("LLM not reachable at %s (%s) — rule-based warnings only until it is",
+                       cfg.llm_base_url, exc)
 
 
 def main() -> None:
@@ -38,9 +55,12 @@ def main() -> None:
         logger.info("Analysis log (transcripts, not audio): %s", log_path)
     datalog = DataLog(log_path)
 
+    llm = ScamLLM(cfg.llm_base_url)
+    check_llm(llm, cfg)
+
     server = ScamServer(cfg)
     server.monitor = ScamMonitor(
-        cfg, MicSource(cfg.mic_device), stt, ScamLLM(cfg.llm_base_url),
+        cfg, MicSource(cfg.mic_device), stt, llm,
         WarningLED(cfg.led_pin), on_event=server.publish, datalog=datalog,
     )
     try:
