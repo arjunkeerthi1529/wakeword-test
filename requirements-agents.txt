@@ -1,12 +1,23 @@
-# Work service dependencies — install alongside requirements.txt
+# Work + Financial service dependencies — install alongside requirements.txt
 # pip install -r requirements.txt -r requirements-agents.txt
 
-# Daily job scheduler (email digest trigger)
+# Daily job scheduler (email digest trigger, src.work)
 schedule
 
 # Load .env file automatically at startup
 python-dotenv
 
-# Work service HTTP server (python -m src.work)
+# HTTP server for both src.work and src.financial
 fastapi
 uvicorn[standard]
+
+# src.financial: statement upload (multipart/form-data) support in FastAPI
+python-multipart
+
+# src.financial: PDF statement parsing
+pymupdf
+
+# src.financial: IANA timezone database -- Linux/the Pi already has this via
+# the OS, but Windows dev machines don't, so zoneinfo.ZoneInfo("Asia/Kolkata")
+# raises ZoneInfoNotFoundError without it. Harmless to install everywhere.
+tzdata
