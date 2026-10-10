@@ -269,6 +269,11 @@
   }
 
   /* ── Email cards ── */
+  /* ── Priority digest ── */
+  #digest-card { border: 1.5px solid var(--accent); background: var(--accent-dim); }
+  .digest-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+  .digest-text { font-size: 14px; line-height: 1.6; color: var(--fg); }
+
   .email-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
   .email-item {
     padding: 12px;
@@ -467,6 +472,18 @@
   </div>
 </div>
 
+<div class="card" id="digest-card">
+  <div class="card-header">
+    <span class="method get">GET</span>
+    <span class="route">/digest</span>
+    <button class="btn-secondary" onclick="loadDigest()">Refresh</button>
+  </div>
+  <div class="card-body">
+    <div class="digest-label">Today's priorities</div>
+    <div id="digest-text" class="digest-text">No digest yet — hit "Fetch &amp; Summarise" above.</div>
+  </div>
+</div>
+
 <div class="card">
   <div class="card-header">
     <span class="method get">GET</span>
@@ -634,11 +651,24 @@
     try {
       const r = await api('POST', '/emails/fetch');
       showResponse('fetch-output', 'fetch-status', 'fetch-body', r);
-      if (r.ok) { loadEmails(); loadDrafts(); }
+      if (r.ok) {
+        loadEmails(); loadDrafts();
+        if (r.data.digest) document.getElementById('digest-text').textContent = r.data.digest;
+      }
     } catch (e) {
       document.getElementById('fetch-status').textContent = 'Connection failed';
       document.getElementById('fetch-status').className = 'status-err';
       document.getElementById('fetch-body').textContent = e.message;
+    }
+  }
+
+  async function loadDigest() {
+    try {
+      const r = await api('GET', '/digest');
+      document.getElementById('digest-text').textContent =
+        r.ok && r.data.digest_text ? r.data.digest_text : 'No digest yet — hit "Fetch & Summarise" above.';
+    } catch (_) {
+      document.getElementById('digest-text').textContent = 'Could not reach agent service';
     }
   }
 
@@ -833,6 +863,7 @@
   // Auto-load on open
   checkHealth();
   loadReminders();
+  loadDigest();
   loadEmails();
   loadDrafts();
   loadMeetings();

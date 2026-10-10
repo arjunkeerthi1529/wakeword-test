@@ -141,17 +141,41 @@ Pending reminders only (not yet fired, still in the future). Returns `Reminder[]
 
 ## `GET /emails`
 
-All stored email summaries, newest first. Returns `EmailSummary[]`.
+All stored email summaries, newest first. Returns `EmailSummary[]`. This is the raw per-email list —
+for the prioritized, demo-facing view, use `GET /digest` instead.
+
+## `GET /digest`
+
+The latest prioritized briefing: one short paragraph synthesized from every analyzed email, written to
+be read top-to-bottom — what needs action today (ranked, with any deadline named), a one-sentence
+roundup of FYI items, and an explicit note on what can be skipped. This is a *second* LLM call on top of
+the per-email analysis, built fresh on every `/emails/fetch` (including a re-fetch where nothing is new
+— it still regenerates from the full current inbox state, so it's never stale after the first run).
+
+```json
+{
+  "id": 1,
+  "digest_text": "Reply to the manager about Q4 budget projections by Friday. The weekly team standup tomorrow at 10:00 AM IST is scheduled. Additionally, your order has been shipped and a reminder for Dr. Sharma's appointment tomorrow is due. Low-priority items such as newsletters and automated notices can be skipped.",
+  "email_count": 8,
+  "created_at": "2026-10-09 22:20:38"
+}
+```
+
+Before the first `/emails/fetch` ever runs: `{"digest_text": null, "email_count": 0, "created_at": null}`.
 
 ## `POST /emails/fetch`
 
-Triggers an immediate fetch + per-email LLM analysis (summary, importance, and a possible draft). Same job
-the daily schedule (`EMAIL_FETCH_TIME`) runs. **Blocks until every email is processed** — budget a client
-timeout of a few minutes; each email is one LLM call.
+Triggers an immediate fetch + per-email LLM analysis (summary, importance, and a possible draft) +
+one more LLM call to build the prioritized digest above. Same job the daily schedule
+(`EMAIL_FETCH_TIME`) runs. **Blocks until every email is processed** — budget a client timeout of a few
+minutes; each email is one LLM call, plus one more for the digest.
 
 ```json
-{ "status": "done", "total_stored": 8 }
+{ "status": "done", "total_stored": 8, "digest": "Reply to the manager about Q4 budget projections by Friday. ..." }
 ```
+
+`digest` here is the same text `GET /digest` returns — convenient if you only need it right after a
+fetch and don't want a second round trip.
 
 ## `GET /drafts`
 
@@ -263,12 +287,15 @@ One meeting note with its full transcript. Returns a `Meeting`. `404` if it does
 
 **Email digest + approval**
 ```text
-1. POST /emails/fetch                      → 200 {total_stored}         (blocks — show a spinner)
-2. GET /emails                             → render the list (importance badge per row)
-3. GET /drafts?status=pending               → anything here needs a human decision
-4. user taps Approve/Reject                → POST /drafts/{id}/approve or /reject
-5. GET /drafts                             → refresh to show updated statuses
+1. POST /emails/fetch                      → 200 {total_stored, digest}  (blocks — show a spinner)
+2. Show `digest` prominently               → this is the headline, not the per-email list
+3. GET /emails                             → the raw per-email list, secondary to the digest
+4. GET /drafts?status=pending               → anything here needs a human decision
+5. user taps Approve/Reject                → POST /drafts/{id}/approve or /reject
+6. GET /drafts                             → refresh to show updated statuses
 ```
+On app launch (before any fetch this session), call `GET /digest` to show the last briefing instead of
+a blank screen.
 
 **Meeting recording**
 ```text

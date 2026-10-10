@@ -21,7 +21,7 @@ SQLite file under `data/`, its own config, its own port.
 |---|---|---|---|---|
 | **Voice assistant** | `python -m src.main` | — (no HTTP server) | wake word ("Hey Jarvis") → streaming STT → LLM → sentence-streamed TTS. The main loop. | — |
 | **Scam Guard** | `python -m src.scam` | 8000 | Listens to a phone call (phone on speakerphone near the Pi's mic), transcribes, flags scam patterns (rules + LLM), pushes live warnings over a WebSocket. | `docs/scam_api.md`, `docs/mobile_integration.md` |
-| **Work** | `python -m src.work` | 8001 | Reminders (voice-triggered or API), daily email digest (currently 8 **mocked** emails, not real IMAP) with LLM-drafted reply/notify actions needing human approval, and a start/stop meeting recorder (mic → faster-whisper transcript → LLM summary). | `docs/work_api.md` |
+| **Work** | `python -m src.work` | 8001 | Reminders (voice-triggered or API), daily email digest (currently 8 **mocked** emails, not real IMAP) with LLM-drafted reply/notify actions needing human approval and a synthesized **prioritized briefing** (`GET /digest` — not just a flat per-email list), and a start/stop meeting recorder (mic → faster-whisper transcript → LLM summary). | `docs/work_api.md` |
 | **Financial** | `python -m src.financial` | 8002 | Expense tracker: accounts, transactions (exact integer-paise arithmetic), quick-add via natural language, CSV/PDF statement import with review, a locked 12-category system, and an Ask engine (LLM interprets the question, a fixed SQL query always computes the actual answer). | *(no dedicated doc yet — see "Financial service" section below)* |
 
 Test dashboards (plain HTML, open directly in a browser, point the API field at the right host:port):
@@ -36,10 +36,13 @@ Test dashboards (plain HTML, open directly in a browser, point the API field at 
   is a hard line across all four services, not a style preference — breaking it undoes the main thing
   that makes any of this trustworthy enough to demo.
 - **Structured LLM output must use strict `json_schema` response_format, not loose `json_object` mode.**
-  Confirmed the hard way (financial service, Oct 2026): with loose `json_object` mode, a 3B model
-  substituted its own field names (`"category"` for `"category_id"`, `"rows"` for `"results"`) despite
-  the prompt spelling out the schema in words — silently defeating the task while still returning
-  "valid" JSON. Strict mode (`{"type": "json_schema", "json_schema": {"name": ..., "schema": ..., "strict": true}}`)
+  Confirmed the hard way twice (financial service's `categorize_batch`, then work service's email
+  `_analyze_email` — both Oct 2026): with loose `json_object` mode, a 3B model substituted its own
+  field names (`"category"` for `"category_id"`, `"rows"` for `"results"`) despite the prompt spelling
+  out the schema in words — silently defeating the task while still returning "valid" JSON. The same
+  fix measurably improved email importance tagging too (urgent-tagging dropped from 5/8 emails to a
+  sensible 1/8 once the model could no longer drift off-schema). Strict mode
+  (`{"type": "json_schema", "json_schema": {"name": ..., "schema": ..., "strict": true}}`)
   on the OpenAI-compatible `/v1/chat/completions` endpoint fixes this and is confirmed working against
   **both** Ollama and llama.cpp. Always use it for anything beyond a trivial flat schema.
 - **`chat_template_kwargs: {"enable_thinking": false}`** is sent on every structured call as a harmless

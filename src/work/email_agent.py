@@ -15,7 +15,7 @@ from typing import Optional
 
 import requests
 
-from .db import save_email_summary, get_all_email_summaries, save_outbound_draft, set_draft_status
+from .db import save_email_summary, get_all_email_summaries, save_outbound_draft, set_draft_status, save_digest
 from .config import AgentConfig
 
 logger = logging.getLogger(__name__)
@@ -147,6 +147,20 @@ _ANALYZE_SYSTEM = (
 _VALID_IMPORTANCE = {"low", "normal", "urgent"}
 _VALID_ACTIONS = {"none", "reply", "notify"}
 
+_ANALYZE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "summary": {"type": "string"},
+        "importance": {"type": "string", "enum": ["low", "normal", "urgent"]},
+        "action": {"type": "string", "enum": ["none", "reply", "notify"]},
+        "subject": {"type": "string"},
+        "body": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["summary", "importance", "action", "subject", "body", "reason"],
+}
+
 
 def _analyze_email(llm_base_url: str, email: dict, model: str = "local") -> dict:
     """Call the local LLM to summarise one email and propose an action.
@@ -177,7 +191,16 @@ def _analyze_email(llm_base_url: str, email: dict, model: str = "local") -> dict
                 "stream": False,
                 "temperature": 0.2,
                 "max_tokens": 220,
-                "response_format": {"type": "json_object"},
+                # Strict schema, not loose "json_object" -- confirmed a small
+                # model will otherwise substitute its own field names despite
+                # the prompt spelling out the shape in words (e.g. a sibling
+                # service saw "category" for "category_id"), silently
+                # defeating the whole call while still returning "valid" JSON.
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "analyze_email", "schema": _ANALYZE_SCHEMA, "strict": True},
+                },
+                "chat_template_kwargs": {"enable_thinking": False},
             },
             timeout=30,
         )
@@ -263,6 +286,68 @@ def _handle_action(
     return draft_id
 
 
+# ── Priority digest (one synthesis call over the whole analyzed inbox) ────────
+
+_DIGEST_SYSTEM = (
+    "You write a short morning briefing from a list of already-summarised "
+    "emails. Each item gives a sender, subject, one-line summary, importance "
+    "(low/normal/urgent), and whether it needs a reply, a notification, or "
+    "no action.\n"
+    "Write 3-5 sentences, plain text, no markdown, no bullet symbols:\n"
+    "1. Start with what needs the user's attention TODAY, most urgent first "
+    "-- name the specific thing and any deadline (e.g. 'Reply to the "
+    "manager about budget projections by Friday').\n"
+    "2. Mention anything merely worth knowing (appointments, deliveries) in "
+    "one combined sentence.\n"
+    "3. Close with a one-clause note on how many low-priority items "
+    "(newsletters, automated notices) can be skipped, without listing them "
+    "individually.\n"
+    "If nothing needs action, say so plainly instead of inventing urgency. "
+    "Base this only on the given summaries -- never invent a fact, sender, "
+    "or deadline that isn't there."
+)
+
+
+def _build_priority_digest(llm_base_url: str, model: str, items: list[dict]) -> str:
+    """One more LLM call over every analyzed email, producing a short
+    prioritized briefing instead of a flat per-email list -- this is the
+    demo-facing output, not the raw list. Falls back to a deterministic
+    count if the model is unavailable, never a fabricated priority list."""
+    if not items:
+        return "No emails to summarise."
+    payload = [
+        {"sender": i["sender"], "subject": i["subject"], "summary": i["summary"],
+         "importance": i["importance"], "action": i["action"]}
+        for i in items
+    ]
+    try:
+        resp = requests.post(
+            f"{llm_base_url.rstrip('/')}/v1/chat/completions",
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": _DIGEST_SYSTEM},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                "stream": False,
+                "temperature": 0.3,
+                "max_tokens": 220,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+            timeout=45,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+    except Exception as exc:
+        logger.warning("LLM digest failed: %s", exc)
+        urgent_count = sum(1 for i in items if i["importance"] == "urgent")
+        action_count = sum(1 for i in items if i["action"] != "none")
+        return (
+            f"The local model is unavailable for a full briefing. Deterministic count: "
+            f"{len(items)} emails, {urgent_count} urgent, {action_count} need a reply or notification."
+        )
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def run(
@@ -270,8 +355,9 @@ def run(
     conn: sqlite3.Connection,
     cfg: AgentConfig,
     tts=None,
-) -> None:
-    """Fetch (mocked) emails, summarise, store, optionally speak.
+) -> str:
+    """Fetch (mocked) emails, summarise, store, build a prioritized digest,
+    optionally speak it. Returns the digest text.
 
     Called by the scheduler at EMAIL_FETCH_TIME each day.
     Safe to call manually for testing.
@@ -280,10 +366,11 @@ def run(
     fetched_at = datetime.now().isoformat(timespec="seconds")
 
     new_count = 0
-    urgent_subjects: list[str] = []
+    all_analyses: list[dict] = []
 
     for email in MOCK_EMAILS:
         analysis = _analyze_email(llm_base_url, email, model=cfg.llm_model)
+        all_analyses.append({"sender": email["sender"], "subject": email["subject"], **analysis})
         inserted = save_email_summary(
             conn,
             uid=email["uid"],
@@ -296,30 +383,21 @@ def run(
         if inserted:
             new_count += 1
             logger.info("[%s] %s | %s", analysis["importance"].upper(), email["sender"], analysis["summary"])
-            if analysis["importance"] == "urgent":
-                urgent_subjects.append(analysis["summary"])
             _handle_action(conn, cfg, email, analysis)
 
     logger.info("Email agent done — %d new email(s) stored", new_count)
 
-    if tts and cfg.agent_read_digest and new_count > 0:
-        _speak_digest(tts, conn, urgent_subjects, new_count)
+    # Built over the whole analyzed inbox (not just this run's new emails) so
+    # re-fetching still regenerates a meaningful briefing even when every
+    # email was already seen before (the common case after the first run).
+    digest_text = _build_priority_digest(llm_base_url, cfg.llm_model, all_analyses)
+    save_digest(conn, digest_text, len(all_analyses))
+    logger.info("Priority digest: %s", digest_text)
 
+    if tts and cfg.agent_read_digest:
+        tts.speak(digest_text)
 
-def _speak_digest(tts, conn: sqlite3.Connection, urgent: list[str], new_count: int) -> None:
-    """Read a short email digest aloud."""
-    rows = get_all_email_summaries(conn)
-    total = len(rows)
-
-    lines = [f"You have {total} emails, {new_count} new."]
-    if urgent:
-        lines.append(f"Urgent: {'. '.join(urgent)}.")
-    else:
-        lines.append("No urgent emails.")
-
-    digest = " ".join(lines)
-    logger.info("Speaking digest: %s", digest)
-    tts.speak(digest)
+    return digest_text
 
 
 # ── CLI helper: print stored summaries ───────────────────────────────────────

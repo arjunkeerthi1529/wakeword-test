@@ -49,6 +49,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
                 created_at  TEXT DEFAULT (datetime('now'))
             );
 
+            CREATE TABLE IF NOT EXISTS digests (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                digest_text  TEXT NOT NULL,
+                email_count  INTEGER NOT NULL,
+                created_at   TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS meetings (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
                 started_at  TEXT NOT NULL,
@@ -111,6 +118,21 @@ def get_all_email_summaries(conn: sqlite3.Connection) -> list:
         "SELECT * FROM email_summaries ORDER BY fetched_at DESC"
     )
     return cur.fetchall()
+
+
+def save_digest(conn: sqlite3.Connection, digest_text: str, email_count: int) -> int:
+    with _lock:
+        cur = conn.execute(
+            "INSERT INTO digests (digest_text, email_count) VALUES (?, ?)",
+            (digest_text, email_count),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def get_latest_digest(conn: sqlite3.Connection):
+    cur = conn.execute("SELECT * FROM digests ORDER BY created_at DESC LIMIT 1")
+    return cur.fetchone()
 
 
 # ── Reminder helpers ──────────────────────────────────────────────────────────

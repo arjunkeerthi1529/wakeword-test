@@ -9,7 +9,8 @@ GET  /health              service health + counts
 POST /remind              schedule a reminder  (called by voice assistant)
 GET  /reminders           list pending reminders
 GET  /emails              list stored email summaries
-POST /emails/fetch        trigger an immediate email fetch + summarise
+POST /emails/fetch        trigger an immediate email fetch + summarise + a prioritized digest
+GET  /digest              the latest prioritized briefing (what needs attention, ranked)
 GET  /drafts              list outbound drafts (replies/notifications), optional ?status=
 POST /drafts/{id}/approve approve a pending draft and send it (mock)
 POST /drafts/{id}/reject  discard a pending draft
@@ -123,18 +124,29 @@ def list_emails():
 
 @app.post("/emails/fetch")
 def fetch_emails():
-    """Trigger an immediate email fetch + LLM summarise. Useful for testing
-    without waiting for the daily schedule."""
+    """Trigger an immediate email fetch + LLM summarise + a prioritized
+    digest. Useful for testing without waiting for the daily schedule."""
     from .email_agent import run as email_run
     tts_arg = _tts if (_agent_cfg and _agent_cfg.agent_read_digest) else None
-    email_run(
+    digest_text = email_run(
         llm_base_url=_main_cfg.llm_base_url,
         conn=_conn,
         cfg=_agent_cfg,
         tts=tts_arg,
     )
     from .db import get_all_email_summaries
-    return {"status": "done", "total_stored": len(get_all_email_summaries(_conn))}
+    return {"status": "done", "total_stored": len(get_all_email_summaries(_conn)), "digest": digest_text}
+
+
+@app.get("/digest")
+def get_digest():
+    """The latest prioritized briefing (what needs your attention, ranked),
+    separate from the raw per-email list in GET /emails."""
+    from .db import get_latest_digest
+    row = get_latest_digest(_conn)
+    if row is None:
+        return {"digest_text": None, "email_count": 0, "created_at": None}
+    return dict(row)
 
 
 @app.get("/drafts")
