@@ -1,5 +1,5 @@
 """Wipe the financial service's SQLite database and reseed it with a
-realistic, demo-friendly dataset -- 3 months of transaction history, budgets
+realistic, demo-friendly dataset -- 6 months of transaction history, budgets
 tuned to actually trigger GET /advice, two savings goals (one behind pace,
 one on track), and two EMIs.
 
@@ -80,6 +80,9 @@ def main() -> None:
     m1_start = add_months(this_month_start, -1)   # last full month
     m2_start = add_months(this_month_start, -2)   # 2 months ago
     m3_start = add_months(this_month_start, -3)   # 3 months ago
+    m4_start = add_months(this_month_start, -4)   # 4 months ago
+    m5_start = add_months(this_month_start, -5)   # 5 months ago
+    m6_start = add_months(this_month_start, -6)   # 6 months ago
 
     # -- accounts -----------------------------------------------------------
     bank = accounts.create_account("HDFC Salary Account", "bank", "4821")
@@ -106,21 +109,38 @@ def main() -> None:
         })
         txn_count += 1
 
-    # -- recurring subscriptions: one hit per month in M1, M2, M3, same day/amount,
-    #    so GET /recurring (needs >=2 of last 3 full months) always fires -------
-    for m_start in (m1_start, m2_start, m3_start):
+    # -- recurring subscriptions: one hit per month across all 6 months,
+    #    so GET /recurring always fires reliably ----------------------------
+    for m_start in (m1_start, m2_start, m3_start, m4_start, m5_start, m6_start):
         spend(m_start.replace(day=6), "Netflix", 649, "subscriptions", card_=True)
         spend(m_start.replace(day=3), "Spotify", 119, "subscriptions", card_=True)
         spend(m_start.replace(day=10), "Cult.fit", 999, "health_fitness", card_=True)
 
     # -- salary, every month including this one ------------------------------
-    for m_start in (m3_start, m2_start, m1_start, this_month_start):
+    for m_start in (m6_start, m5_start, m4_start, m3_start, m2_start, m1_start, this_month_start):
         income(m_start.replace(day=1), "Salary", 65000)
 
-    # -- M3 / M2: light variety, categories kept OUT of the Food comparison
-    #    group (food_dining/groceries) so they never skew the spending_spike
-    #    comparison below --------------------------------------------------
-    for m_start in (m3_start, m2_start):
+    # -- M6 / M5: early history — modest spending ----------------------------
+    for m_start in (m6_start, m5_start):
+        spend(m_start.replace(day=5),  "Ola", 140, "transport")
+        spend(m_start.replace(day=11), "Zepto", 900, "groceries")
+        spend(m_start.replace(day=15), "Swiggy", 750, "food_dining")
+        spend(m_start.replace(day=20), "Amazon", 1100, "shopping")
+        spend(m_start.replace(day=25), "BookMyShow", 320, "entertainment")
+        spend(m_start.replace(day=28), "D-Mart", 1200, "groceries")
+
+    # -- M4 / M3: slightly higher spending -----------------------------------
+    for m_start in (m4_start, m3_start):
+        spend(m_start.replace(day=4), "Ola", 180, "transport")
+        spend(m_start.replace(day=9), "Zepto", 1100, "groceries")
+        spend(m_start.replace(day=12), "Uber", 240, "transport")
+        spend(m_start.replace(day=16), "Swiggy", 1300, "food_dining")
+        spend(m_start.replace(day=18), "Myntra", 1400, "shopping")
+        spend(m_start.replace(day=22), "PVR Cinemas", 450, "entertainment")
+        spend(m_start.replace(day=27), "Decathlon", 899, "shopping")
+
+    # -- M2: comparison baseline month (kept same as original) ---------------
+    for m_start in (m2_start,):
         spend(m_start.replace(day=4), "Ola", 180, "transport")
         spend(m_start.replace(day=12), "Uber", 240, "transport")
         spend(m_start.replace(day=18), "Myntra", 1400, "shopping")
@@ -175,7 +195,7 @@ def main() -> None:
     # is health_fitness, not subscriptions) = up to 768, intentionally over
     # the Rs1,000 budget once both have posted this month
 
-    print(f"Seeded {txn_count} transactions across {m3_start.isoformat()} .. {today.isoformat()}")
+    print(f"Seeded {txn_count} transactions across {m6_start.isoformat()} .. {today.isoformat()}")
 
     # -- budgets: tuned to produce one bad, one warn, one forecast-only, and
     #    one healthy category on GET /advice -------------------------------
@@ -186,7 +206,7 @@ def main() -> None:
     print("Budgets set: food_dining=8000 subscriptions=1000 shopping=6000 transport=3000")
 
     # -- goals: one behind pace, one on track --------------------------------
-    ef_start = add_months(today, -6)
+    ef_start = m6_start
     ef_due = add_months(today, 6)
     emergency_fund = goals.create("Emergency Fund", "🛟", P(100000), ef_start.isoformat(), ef_due.isoformat())
     goals.add_contribution(emergency_fund["id"], P(15000), add_months(today, -4).isoformat(), "initial deposit")
