@@ -9,8 +9,8 @@ from .hardware_interface import HardwareIO
 logger = logging.getLogger(__name__)
 
 _SWITCH_PIN = 17   # pin 11 — on/off switch
-_GREEN_PIN  = 22   # pin 15 — listening (switch ON)
-_RED_PIN    = 27   # pin 13 — muted    (switch OFF)
+_GREEN_PIN  = 27   # pin 13 — listening (switch ON)
+_RED_PIN    = 23   # pin 16 — muted    (switch OFF)
 
 
 class PiHardwareIO(HardwareIO):
