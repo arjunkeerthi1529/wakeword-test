@@ -1,81 +1,76 @@
 import logging
+import threading
+import time
+
+import RPi.GPIO as GPIO
 
 from .hardware_interface import HardwareIO
 
 logger = logging.getLogger(__name__)
 
+_SWITCH_PIN = 17   # pin 11 — on/off switch
+_GREEN_PIN  = 22   # pin 15 — listening (switch ON)
+_RED_PIN    = 27   # pin 13 — muted    (switch OFF)
+
 
 class PiHardwareIO(HardwareIO):
-    """Raspberry Pi GPIO backend using gpiozero.
-
-    Mute button   — GPIO 17, pulled high, active low, 100ms debounce.
-    Listening LED — GPIO 27:
-                      fast blink (0.1s/0.1s) while capturing speech,
-                      slow blink (0.5s/0.5s) while LLM is thinking,
-                      solid on while TTS is playing.
-    Online LED    — GPIO 22: solid on during any network call (currently unused
-                      in this project but wired for hardware compatibility).
-
-    Stages passed to set_indicator():
-        "waiting_for_wake"  — LED off (idle, gate closed)
-        "listening"         — fast blink (capturing user speech)
-        "thinking"          — slow blink (STT + LLM processing)
-        "speaking"          — solid on (TTS playback)
-        "muted"             — LED off
+    """
+    Switch ON  (closed to GND) → green LED on,  red LED off  → listening
+    Switch OFF (open)          → red LED on,  green LED off → muted
     """
 
-    def __init__(
-        self,
-        mute_button_pin: int = 17,
-        listening_led_pin: int = 27,
-        online_led_pin: int = 22,
-    ):
+    def __init__(self, mute_button_pin: int = _SWITCH_PIN, led_pin: int = _GREEN_PIN):
         super().__init__()
-        from gpiozero import Button, LED  # imported here so non-Pi machines can import the module
-        self._button = Button(mute_button_pin, pull_up=True, bounce_time=0.1)
-        self._listen_led = LED(listening_led_pin)
-        self._online_led = LED(online_led_pin)
-        logger.info(
-            "PiHardwareIO initialised — mute_btn=GPIO%d  listen_led=GPIO%d  online_led=GPIO%d",
-            mute_button_pin,
-            listening_led_pin,
-            online_led_pin,
-        )
+        self._mute_pin  = mute_button_pin
+        self._green_pin = led_pin
+        self._red_pin   = _RED_PIN
+        self._poll_stop = threading.Event()
+        self._last_state = None
 
     def start(self):
-        """Wire the mute button callback. Call once after __init__."""
-        self._button.when_pressed = self.toggle_mute
-        logger.info(
-            "GPIO started — press button on GPIO%d to mute/unmute",
-            self._button.pin.number,
-        )
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+        GPIO.setup(self._mute_pin,  GPIO.IN,  pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(self._green_pin, GPIO.OUT, initial=GPIO.LOW)
+        GPIO.setup(self._red_pin,   GPIO.OUT, initial=GPIO.LOW)
+
+        initial_muted = GPIO.input(self._mute_pin) == GPIO.HIGH
+        self._last_state = GPIO.input(self._mute_pin)
+        self._set_muted(initial_muted)
+        self._apply_leds(initial_muted)
+
+        threading.Thread(target=self._poll_loop, daemon=True, name="gpio-poll").start()
+        logger.info("GPIO ready — switch=GPIO%d (boot=%s) green=GPIO%d red=GPIO%d",
+                    self._mute_pin, "MUTED" if initial_muted else "ACTIVE",
+                    self._green_pin, self._red_pin)
+
+    def _apply_leds(self, muted: bool):
+        GPIO.output(self._green_pin, GPIO.LOW  if muted else GPIO.HIGH)
+        GPIO.output(self._red_pin,   GPIO.HIGH if muted else GPIO.LOW)
+
+    def _poll_loop(self):
+        while not self._poll_stop.is_set():
+            current = GPIO.input(self._mute_pin)
+            if current != self._last_state:
+                time.sleep(0.05)
+                if GPIO.input(self._mute_pin) == current:
+                    self._last_state = current
+                    muted = current == GPIO.HIGH
+                    self._set_muted(muted)
+                    self._apply_leds(muted)
+                    logger.info("Switch → %s", "MUTED" if muted else "ACTIVE")
+            self._poll_stop.wait(0.05)
 
     def stop(self):
-        """Turn off LEDs and release all GPIO resources."""
-        self._listen_led.off()
-        self._online_led.off()
-        self._button.close()
-        self._listen_led.close()
-        self._online_led.close()
-        logger.info("GPIO released")
+        self._poll_stop.set()
+        GPIO.output(self._green_pin, GPIO.LOW)
+        GPIO.output(self._red_pin,   GPIO.LOW)
+        GPIO.cleanup()
 
     def toggle_mute(self):
-        """Called by gpiozero on button press."""
-        self._set_muted(not self._muted)
-        logger.info("Mute toggled -> %s", "MUTED" if self._muted else "UNMUTED")
-        if self._muted:
-            self._listen_led.off()
+        new_muted = not self._muted
+        self._set_muted(new_muted)
+        self._apply_leds(new_muted)
 
     def set_indicator(self, stage: str):
-        """Drive the listening LED to reflect the current pipeline stage."""
-        if self._muted:
-            self._listen_led.off()
-            return
-        if stage == "listening":
-            self._listen_led.blink(on_time=0.1, off_time=0.1)
-        elif stage == "thinking":
-            self._listen_led.blink(on_time=0.5, off_time=0.5)
-        elif stage == "speaking":
-            self._listen_led.on()
-        else:  # "waiting_for_wake", "muted", unknown
-            self._listen_led.off()
+        self._apply_leds(self._muted or stage == "muted")

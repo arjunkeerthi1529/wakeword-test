@@ -31,8 +31,7 @@ wake_word:
 
 gpio:
   mute_button_pin: 17
-  listening_led_pin: 27
-  online_led_pin: 22
+  led_pin: 27
 
 # Append per-turn latency rows to latency_log.csv alongside this process.
 # Set false to disable CSV logging (table still prints to terminal).

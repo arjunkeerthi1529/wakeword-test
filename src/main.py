@@ -66,8 +66,7 @@ def main() -> None:
     try:
         hardware = PiHardwareIO(
             mute_button_pin=cfg.gpio_mute_pin,
-            listening_led_pin=cfg.gpio_listen_led_pin,
-            online_led_pin=cfg.gpio_online_led_pin,
+            led_pin=cfg.gpio_led_pin,
         )
     except Exception as e:
         logger.warning("GPIO unavailable (%s) — falling back to NullHardwareIO", e)

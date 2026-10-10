@@ -19,8 +19,7 @@ class Config:
     wake_threshold:      float
     wake_backend:        str
     gpio_mute_pin:       int
-    gpio_listen_led_pin: int
-    gpio_online_led_pin: int
+    gpio_led_pin:        int
     log_latency_csv:     bool
     tts_aplay_device:    str = ""    # "plughw:3,0" or "auto": play via aplay instead of sounddevice
     tts_output_device:   str = ""    # sounddevice output (index or name); "" = system default
@@ -52,8 +51,7 @@ def get_config() -> Config:
                                        wake_cfg.get("threshold", 0.5))),
         wake_backend=os.getenv("WAKE_BACKEND", wake_cfg.get("backend", "onnx")),
         gpio_mute_pin=int(gpio_cfg.get("mute_button_pin", 17)),
-        gpio_listen_led_pin=int(gpio_cfg.get("listening_led_pin", 27)),
-        gpio_online_led_pin=int(gpio_cfg.get("online_led_pin", 22)),
+        gpio_led_pin=int(gpio_cfg.get("led_pin", 27)),
         log_latency_csv=raw.get("log_latency_csv", True),
         tts_aplay_device=str(os.getenv("TTS_APLAY_DEVICE", raw.get("tts_aplay_device", "")) or ""),
         tts_output_device=str(os.getenv("TTS_OUTPUT_DEVICE", raw.get("tts_output_device", "")) or ""),
