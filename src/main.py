@@ -37,6 +37,7 @@ from .latency import LatencyTracker
 from .llm.llama_cpp_client import LlamaCppClient
 from .stt.whisper_engine import WhisperEngine
 from .tts.piper_engine import PiperEngine
+from .llm.tools import JARVIS_TOOLS, execute_tool
 from .work.config import get_agent_config
 from .work.reminder_agent import parse_tag
 
@@ -103,10 +104,23 @@ def main() -> None:
                       aplay_device=cfg.tts_aplay_device)
 
     # ── Agent service link ────────────────────────────────────────────────
-    # Reminders and email digest run in a separate process (python -m src.work).
-    # This service only forwards reminder intents via HTTP POST /remind.
     agent_service_url = get_agent_config().agent_service_url
     logger.info("Work service URL: %s  (start with: python -m src.work)", agent_service_url)
+
+    # ── Financial service — cache accounts for tool calling ───────────────
+    import requests as _requests
+    FINANCIAL_URL = "http://localhost:8002"
+    _accounts: dict[str, str] = {}
+    try:
+        for a in _requests.get(f"{FINANCIAL_URL}/accounts", timeout=3).json():
+            if not a.get("archived_at"):
+                _accounts[a["type"]] = a["id"]
+        logger.info("Financial accounts loaded: %s", _accounts)
+    except Exception as exc:
+        logger.warning("Financial service unavailable at startup (%s) — expense logging disabled", exc)
+
+    def _tool_executor(name: str, args: dict) -> str:
+        return execute_tool(name, args, _accounts, FINANCIAL_URL, agent_service_url)
 
     # ── Start ─────────────────────────────────────────────────────────────
     hardware.start()
@@ -159,12 +173,16 @@ def main() -> None:
             # ── LLM + sentence-streaming TTS ──────────────────────────────
             gate.suppressed = True
             hardware.set_indicator("thinking")
-            reply, stats = _stream_reply_with_tts(llm, tts, text, tracker, hardware)
+            reply, stats = _stream_reply_with_tts(
+                llm, tts, text, tracker, hardware,
+                tools=JARVIS_TOOLS, tool_executor=_tool_executor,
+            )
 
-            # ── Forward reminder intent to agent service ───────────────────
-            _, spec = parse_tag(reply)
-            if spec:
-                _forward_reminder(spec, agent_service_url)
+            # ── Fallback: old [REMINDER] tag if tool calling didn't fire ──
+            if not stats.get("tool_calls"):
+                _, spec = parse_tag(reply)
+                if spec:
+                    _forward_reminder(spec, agent_service_url)
 
             # ── Latency report ────────────────────────────────────────────
             tracker.report(
@@ -300,6 +318,8 @@ def _stream_reply_with_tts(
     text: str,
     tracker: LatencyTracker,
     hardware,
+    tools=None,
+    tool_executor=None,
 ):
     """Stream LLM tokens → detect sentence boundaries → play each sentence
     concurrently so TTS starts while LLM is still generating the rest."""
@@ -338,7 +358,13 @@ def _stream_reply_with_tts(
             tts_q.put(sentence)
 
     logger.info("Querying llama.cpp (%s)…", llm.base_url)
-    reply, stats = llm.chat(text, on_first_token=on_first_token, on_token=on_token)
+    reply, stats = llm.chat(
+        text,
+        on_first_token=on_first_token,
+        on_token=on_token,
+        tools=tools,
+        tool_executor=tool_executor,
+    )
     tracker.mark("llm_done")
 
     # Strip machine-readable reminder tag so it is never spoken aloud

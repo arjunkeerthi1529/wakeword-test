@@ -1,59 +1,43 @@
 import json
 import logging
 import time
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import requests
 
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You are a concise voice assistant. "
-    "Keep your reply to two or three short sentences. "
-    "No markdown, no bullet points, no formatting — plain conversational speech only.\n\n"
-    "REMINDERS: If the user asks you to remind them of something, confirm it naturally "
-    "in your spoken reply, then on a NEW LINE at the very end append a machine-readable tag "
-    "(never speak it aloud):\n"
-    "  For relative time: [REMINDER delay=<n><s|m|h> message=<short description>]\n"
-    "  For absolute time: [REMINDER at=HH:MM message=<short description>]\n"
-    "Examples:\n"
-    "  User: remind me to drink water in 5 minutes\n"
-    "  Reply: Sure, I will remind you to drink water in 5 minutes.\n"
-    "  [REMINDER delay=5m message=drink water]\n\n"
-    "  User: remind me to call Mum at 3pm\n"
-    "  Reply: Got it, I will remind you to call Mum at 3 PM.\n"
-    "  [REMINDER at=15:00 message=call Mum]\n\n"
-    "Only emit the tag when the user explicitly asks for a reminder. Never include it otherwise."
+    "You are a concise voice assistant called Jarvis. "
+    "Keep replies to two or three short spoken sentences. "
+    "No markdown, no bullet points — plain conversational speech only.\n\n"
+    "You have tools: use log_expense to record purchases, set_reminder for reminders. "
+    "After a tool succeeds, confirm naturally in your spoken reply.\n\n"
+    "REMINDERS (fallback): If tool calling is unavailable you may also emit a "
+    "machine-readable tag on a new line at the end:\n"
+    "  [REMINDER delay=<n><s|m|h> message=<text>]\n"
+    "  [REMINDER at=HH:MM message=<text>]\n"
+    "Prefer tool calling when available."
 )
 
 
 class LlamaCppClient:
-    """HTTP streaming client for llama.cpp server /v1/chat/completions endpoint.
+    """HTTP streaming client for llama.cpp with agent-loop tool calling.
 
-    Uses the OpenAI-compatible endpoint so llama.cpp automatically applies
-    the model's chat template (required for Qwen, Llama-3, etc.).
-
-    llama.cpp server must be running:
-        ~/llm/llama.cpp/build/bin/llama-server \\
-            -m ~/models/Qwen3.5-0.8B-Q4_0.gguf \\
-            --host 0.0.0.0 --port 8080 -c 2048 -t 4 --parallel 1
-
-    Fires on_first_token() the instant the first non-empty token arrives,
-    enabling accurate TTFT measurement from the caller's LatencyTracker.
-
-    Returns (reply_text, stats) where stats contains:
-        tok_per_s    — generated tokens/s (computed from wall clock)
-        tok_count    — completion tokens (from usage field)
-        prompt_tok   — prompt tokens (from usage field)
-        prompt_per_s — prompt tokens/s (computed from wall clock)
+    Flow:
+      1. Send user message (+ tools if provided)
+      2. If LLM returns tool_calls → execute via tool_executor, append results,
+         re-call LLM (up to MAX_ROUNDS)
+      3. When LLM returns text only → stream tokens via on_token callback → done
     """
+
+    MAX_ROUNDS = 3
 
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
-        self._history: list = []   # conversation turns: [{role, content}, ...]
+        self._history: list = []
 
     def reset_history(self) -> None:
-        """Clear conversation history — call when starting a new conversation."""
         self._history = []
         logger.info("Conversation history cleared")
 
@@ -62,25 +46,113 @@ class LlamaCppClient:
         user_text: str,
         on_first_token: Optional[Callable[[], None]] = None,
         on_token: Optional[Callable[[str], None]] = None,
+        tools: Optional[List[dict]] = None,
+        tool_executor: Optional[Callable[[str, dict], str]] = None,
     ) -> Tuple[str, Dict]:
-        # Append user turn to history
         self._history.append({"role": "user", "content": user_text})
 
-        payload = {
-            "model": "local",           # llama.cpp ignores this, uses loaded model
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                *self._history,         # full conversation history
-            ],
-            "stream": True,
-            "temperature": 0.7,
-            "max_tokens": 200,
-            "stop": ["\nUser:", "<|im_end|>"],
-            # Disable Qwen3 chain-of-thought thinking mode via llama.cpp's
-            # Jinja template parameter — prevents all tokens going to reasoning_content
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
+        all_stats: Dict = {}
+        first_token_fired = False
 
+        for _round in range(self.MAX_ROUNDS):
+            payload = {
+                "model": "local",
+                "messages": [
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    *self._history,
+                ],
+                "stream": True,
+                "temperature": 0.7,
+                "max_tokens": 200,
+                "stop": ["\nUser:", "<|im_end|>"],
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+            if tools:
+                payload["tools"] = tools
+                payload["tool_choice"] = "auto"
+
+            tokens, tool_calls, usage, t_first, t_start, t_end = self._stream_once(
+                payload,
+                on_first_token=on_first_token if not first_token_fired else None,
+                on_token=on_token,
+            )
+
+            if t_first is not None:
+                first_token_fired = True
+
+            tok_count = usage.get("completion_tokens", len(tokens))
+            prompt_tok = usage.get("prompt_tokens", 0)
+            gen_elapsed = t_end - (t_first or t_start)
+            prompt_elapsed = (t_first or t_end) - t_start
+            all_stats = {
+                "tok_per_s": tok_count / gen_elapsed if gen_elapsed > 0 else 0.0,
+                "tok_count": tok_count,
+                "prompt_tok": prompt_tok,
+                "prompt_per_s": prompt_tok / prompt_elapsed if prompt_elapsed > 0 else 0.0,
+            }
+
+            if not tool_calls:
+                reply = "".join(tokens).strip()
+                if reply:
+                    self._history.append({"role": "assistant", "content": reply})
+                if len(self._history) > 20:
+                    self._history = self._history[-20:]
+
+                logger.info(
+                    "llama.cpp done (round %d): %d tok @ %.1f tok/s",
+                    _round + 1, tok_count, all_stats["tok_per_s"],
+                )
+                all_stats["tool_calls"] = []
+                return reply, all_stats
+
+            # --- tool calls: execute and loop ---
+            assistant_msg: dict = {"role": "assistant", "content": None, "tool_calls": []}
+            executed_calls = []
+            for tc in tool_calls:
+                tc_entry = {
+                    "id": tc["id"],
+                    "type": "function",
+                    "function": {"name": tc["name"], "arguments": json.dumps(tc["arguments"])},
+                }
+                assistant_msg["tool_calls"].append(tc_entry)
+                executed_calls.append(tc)
+
+            self._history.append(assistant_msg)
+
+            for tc in executed_calls:
+                result = "{}"
+                if tool_executor:
+                    try:
+                        result = tool_executor(tc["name"], tc["arguments"])
+                    except Exception as exc:
+                        logger.warning("Tool executor error for %s: %s", tc["name"], exc)
+                        result = json.dumps({"status": "error", "detail": str(exc)})
+                self._history.append({
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": result,
+                })
+
+            logger.info(
+                "Round %d: %d tool call(s) executed, looping for verbal reply",
+                _round + 1, len(executed_calls),
+            )
+            all_stats["tool_calls"] = executed_calls
+
+        reply = "".join(tokens).strip()
+        if reply:
+            self._history.append({"role": "assistant", "content": reply})
+        if len(self._history) > 20:
+            self._history = self._history[-20:]
+        return reply, all_stats
+
+    def _stream_once(
+        self,
+        payload: dict,
+        on_first_token: Optional[Callable[[], None]],
+        on_token: Optional[Callable[[str], None]],
+    ) -> Tuple[list, list, dict, Optional[float], float, float]:
+        """Single streaming request. Returns (tokens, tool_calls, usage, t_first, t_start, t_end)."""
         logger.debug("POST %s/v1/chat/completions", self.base_url)
         resp = requests.post(
             f"{self.base_url}/v1/chat/completions",
@@ -90,7 +162,8 @@ class LlamaCppClient:
         )
         resp.raise_for_status()
 
-        tokens = []
+        tokens: list[str] = []
+        tool_call_chunks: dict[int, dict] = {}
         first_fired = False
         t_first: Optional[float] = None
         t_start = time.monotonic()
@@ -101,7 +174,6 @@ class LlamaCppClient:
                 continue
             line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
 
-            # SSE format: "data: {...}" or "data: [DONE]"
             if not line.startswith("data:"):
                 continue
             line = line[len("data:"):].strip()
@@ -109,18 +181,15 @@ class LlamaCppClient:
                 break
 
             data = json.loads(line)
-
-            # Extract token text from delta
-            # Qwen3 puts reasoning in reasoning_content and reply in content
             choices = data.get("choices", [])
-            token_text = ""
-            finish_reason = None
-            if choices:
-                delta = choices[0].get("delta", {})
-                token_text = delta.get("content", "") or ""
-                finish_reason = choices[0].get("finish_reason")
+            if not choices:
+                continue
 
-            # Fire TTFT callback exactly once on first non-empty token
+            delta = choices[0].get("delta", {})
+            finish_reason = choices[0].get("finish_reason")
+
+            # --- text content ---
+            token_text = delta.get("content", "") or ""
             if token_text and not first_fired:
                 t_first = time.monotonic()
                 if on_first_token is not None:
@@ -129,45 +198,38 @@ class LlamaCppClient:
 
             if token_text:
                 tokens.append(token_text)
-                if on_token is not None:
+                if on_token is not None and not tool_call_chunks:
                     on_token(token_text)
 
-            # usage is in the final chunk (finish_reason == "stop")
-            if finish_reason == "stop":
+            # --- tool call fragments ---
+            for tc in delta.get("tool_calls", []):
+                idx = tc.get("index", 0)
+                if idx not in tool_call_chunks:
+                    tool_call_chunks[idx] = {"id": tc.get("id", f"call_{idx}"), "name": "", "args_buf": ""}
+                fn = tc.get("function", {})
+                if fn.get("name"):
+                    tool_call_chunks[idx]["name"] = fn["name"]
+                tool_call_chunks[idx]["args_buf"] += fn.get("arguments", "") or ""
+                if tc.get("id"):
+                    tool_call_chunks[idx]["id"] = tc["id"]
+
+            if finish_reason == "stop" or finish_reason == "tool_calls":
                 usage = data.get("usage", {})
                 break
 
         t_end = time.monotonic()
-        tok_count = usage.get("completion_tokens", len(tokens))
-        prompt_tok = usage.get("prompt_tokens", 0)
 
-        # Compute tok/s from wall clock (llama.cpp doesn't return timings
-        # on the /v1/chat/completions endpoint)
-        gen_elapsed = t_end - (t_first or t_start)
-        tok_per_s = tok_count / gen_elapsed if gen_elapsed > 0 else 0.0
+        parsed_calls = []
+        for chunk in tool_call_chunks.values():
+            try:
+                args = json.loads(chunk["args_buf"]) if chunk["args_buf"] else {}
+            except json.JSONDecodeError:
+                logger.warning("Bad tool call JSON: %s", chunk["args_buf"])
+                continue
+            parsed_calls.append({
+                "id": chunk["id"],
+                "name": chunk["name"],
+                "arguments": args,
+            })
 
-        prompt_elapsed = (t_first or t_end) - t_start
-        prompt_per_s = prompt_tok / prompt_elapsed if prompt_elapsed > 0 else 0.0
-
-        stats = {
-            "tok_per_s":    tok_per_s,
-            "tok_count":    tok_count,
-            "prompt_tok":   prompt_tok,
-            "prompt_per_s": prompt_per_s,
-        }
-        logger.info(
-            "llama.cpp done: %d tokens @ %.1f tok/s  (prompt %d tok @ %.1f tok/s)",
-            tok_count, tok_per_s, prompt_tok, prompt_per_s,
-        )
-
-        reply = "".join(tokens).strip()
-
-        # Save assistant reply to history for context in follow-up turns
-        if reply:
-            self._history.append({"role": "assistant", "content": reply})
-
-        # Trim history to last 10 turns to stay within context window
-        if len(self._history) > 20:
-            self._history = self._history[-20:]
-
-        return reply, stats
+        return tokens, parsed_calls, usage, t_first, t_start, t_end
