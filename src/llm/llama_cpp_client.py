@@ -8,17 +8,34 @@ import requests
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
-    "You are a concise voice assistant called Jarvis. "
+    "You are Jarvis, a concise voice assistant. "
     "Keep replies to two or three short spoken sentences. "
-    "No markdown, no bullet points — plain conversational speech only.\n\n"
-    "You have tools: use log_expense to record purchases, set_reminder for reminders. "
-    "After a tool succeeds, confirm naturally in your spoken reply.\n\n"
-    "REMINDERS (fallback): If tool calling is unavailable you may also emit a "
-    "machine-readable tag on a new line at the end:\n"
-    "  [REMINDER delay=<n><s|m|h> message=<text>]\n"
-    "  [REMINDER at=HH:MM message=<text>]\n"
-    "Prefer tool calling when available."
+    "No markdown, no bullet points — plain speech only. "
+    "Always use the provided tools when the user asks to log an expense or set a reminder."
 )
+
+# Few-shot examples as conversation turns — teaches the model the tool calling pattern
+_FEW_SHOT_TURNS = [
+    {"role": "user", "content": "add 500 rupees for Swiggy"},
+    {"role": "assistant", "content": None, "tool_calls": [
+        {"id": "ex1", "type": "function",
+         "function": {"name": "log_expense",
+                      "arguments": '{"amount":500,"merchant":"Swiggy","category":"food_dining"}'}}
+    ]},
+    {"role": "tool", "tool_call_id": "ex1",
+     "content": '{"status":"ok","merchant":"Swiggy","amount":500,"account":"bank"}'},
+    {"role": "assistant", "content": "Done, I have logged 500 rupees for Swiggy as food."},
+
+    {"role": "user", "content": "remind me to drink water in 5 minutes"},
+    {"role": "assistant", "content": None, "tool_calls": [
+        {"id": "ex2", "type": "function",
+         "function": {"name": "set_reminder",
+                      "arguments": '{"message":"drink water","delay_seconds":300}'}}
+    ]},
+    {"role": "tool", "tool_call_id": "ex2",
+     "content": '{"status":"ok","message":"drink water"}'},
+    {"role": "assistant", "content": "Sure, I will remind you to drink water in 5 minutes."},
+]
 
 
 class LlamaCppClient:
@@ -59,6 +76,7 @@ class LlamaCppClient:
                 "model": "local",
                 "messages": [
                     {"role": "system", "content": _SYSTEM_PROMPT},
+                    *_FEW_SHOT_TURNS,
                     *self._history,
                 ],
                 "stream": True,
