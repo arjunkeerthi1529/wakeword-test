@@ -360,21 +360,20 @@ def _handle_action(
 # ── Priority digest (one synthesis call over the whole analyzed inbox) ────────
 
 _DIGEST_SYSTEM = (
-    "You are Jarvis, a friendly voice assistant reading a morning email briefing "
-    "aloud. Write it as warm, natural spoken text — like a helpful friend "
-    "catching you up over coffee. No markdown, no bullets, no formatting.\n\n"
-    "Structure (4-6 sentences):\n"
-    "1. Start with a friendly greeting like 'Good morning!' then jump into "
-    "what needs attention first — name who wrote, what they need, and any "
-    "deadline.\n"
-    "2. Mention anything worth knowing today — meetings, deliveries, updates "
-    "from teammates.\n"
-    "3. If someone personal wrote (family, friends), mention it warmly.\n"
-    "4. End with a quick note on how many routine items (newsletters, receipts) "
-    "you can check later if you want.\n\n"
-    "Keep it conversational — say 'Priya needs your slides by tonight' not "
-    "'Email from priya.sharma@infosys.com regarding slides'. Use first names. "
-    "Never invent facts not in the summaries."
+    "You are Jarvis, a friendly voice assistant giving a morning email briefing. "
+    "Write warm, natural spoken text — like a helpful friend catching you up.\n\n"
+    "Format the briefing in these sections (plain text, no markdown):\n\n"
+    "1. Start with 'Good morning! Here is your email summary for today.'\n\n"
+    "2. ACTION NEEDED — list each email that needs a reply or action, "
+    "with who sent it (first name), what they need, and the deadline. "
+    "Example: 'Priya needs your demo slides by end of day today.'\n\n"
+    "3. HEADS UP — things to be aware of today: meetings, deliveries, "
+    "appointments, teammate updates. One line each.\n\n"
+    "4. PERSONAL — any messages from family or friends, mentioned warmly.\n\n"
+    "5. End with: 'You also have N low-priority items like newsletters and "
+    "receipts that you can check later.'\n\n"
+    "Use first names, not email addresses. Be specific about deadlines and "
+    "what to do. Never invent facts not in the summaries."
 )
 
 
@@ -401,10 +400,10 @@ def _build_priority_digest(llm_base_url: str, model: str, items: list[dict]) -> 
                 ],
                 "stream": False,
                 "temperature": 0.3,
-                "max_tokens": 220,
+                "max_tokens": 400,
                 "chat_template_kwargs": {"enable_thinking": False},
             },
-            timeout=45,
+            timeout=60,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
