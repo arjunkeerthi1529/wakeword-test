@@ -22,6 +22,7 @@ from typing import Optional
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import TypeAdapter
 
@@ -89,6 +90,7 @@ class ScamServer:
 
         app = FastAPI(title="Scam Guard API", version=API_VERSION, description=_DESCRIPTION,
                       lifespan=lifespan)
+        app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
         @app.exception_handler(RequestValidationError)
         async def invalid_request(_request: Request, exc: RequestValidationError):
